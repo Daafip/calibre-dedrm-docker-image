@@ -5,20 +5,31 @@ WINEPREFIX="${WINEPREFIX:-/home/calibre/wineprefix}"
 BOOKS_DIR="${BOOKS_DIR:-/home/calibre/books}"
 CALIBRE_CONFIG="${CALIBRE_CONFIG_DIRECTORY:-/home/calibre/calibre-config}"
 
-PYTHON_EXE="$WINEPREFIX/drive_c/Python312/python.exe"
+PYTHON_EXE="$WINEPREFIX/drive_c/users/calibre/AppData/Local/Programs/Python/Python312-32/python.exe"
 ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.5/DigitalEditions.exe"
-DEDRM_MARKER="$CALIBRE_CONFIG/calibre/plugins/DeDRM.json"
+DEDRM_MARKER="$CALIBRE_CONFIG/plugins/dedrm.json"
+
+# Use Xvfb when no real display is available (headless bootstrap)
+if [ -z "${DISPLAY:-}" ]; then
+    Xvfb :99 -screen 0 1024x768x24 -nolisten tcp &
+    XVFB_PID=$!
+    export DISPLAY=:99
+    trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
+fi
 
 # ── Phase 2: Wine prefix bootstrap ─────────────────────────────────────────
-if [ ! -d "$WINEPREFIX/drive_c/windows" ]; then
+WINETRICKS_DONE="$WINEPREFIX/.winetricks_done"
+if [ ! -f "$WINETRICKS_DONE" ]; then
     echo ">>> Initializing Wine prefix (win32) — takes a few minutes..."
     wineboot --init
 
     echo ">>> Installing Windows components via winetricks..."
     # dotnet40 required by ADE 4.5; corefonts + tahoma prevent ADE crash in
     # FontFamily.get_FirstFontFamily(); win7 required — ADE won't run on XP.
-    winetricks -q dotnet40 corefonts tahoma windowscodecs
-    winetricks -q win7
+    # windowscodecs omitted: Wine 9 ships its own WIC implementation.
+    winetricks -q dotnet40 corefonts tahoma
+    winetricks -q win10
+    touch "$WINETRICKS_DONE"
 fi
 
 # ── Phase 3: Python 3.12 (32-bit) + pycryptodome ───────────────────────────
@@ -32,8 +43,21 @@ if [ ! -f "$PYTHON_EXE" ]; then
     fi
     echo ">>> Installing Python 3.12 (32-bit)..."
     wine "$PY_INSTALLER" /quiet PrependPath=1 Include_doc=0
+    # Ensure python.exe is resolvable by name (PrependPath sometimes silently fails under Wine)
+    PY_DIR="C:\\users\\calibre\\AppData\\Local\\Programs\\Python\\Python312-32"
+    wine reg add "HKCU\\Environment" /v Path /t REG_SZ \
+        /d "${PY_DIR};${PY_DIR}\\Scripts" /f
     echo ">>> Installing pycryptodome..."
-    wine python -m pip install --quiet pycryptodome
+    wine "$PYTHON_EXE" -m pip install --quiet pycryptodome
+fi
+
+# Phases 4+5 require a real display and user interaction — skip in bootstrap mode
+CMD="${1:-gui}"
+if [ "$CMD" = "bootstrap" ]; then
+    echo ">>> Phase 2 + 3 complete. Wine prefix and Python are ready."
+    echo "    Next: run with your display to install ADE (Phase 4):"
+    echo "      xhost +local:docker && docker compose run --rm calibre"
+    exit 0
 fi
 
 # ── Phase 4: Adobe Digital Editions install ─────────────────────────────────
@@ -73,17 +97,26 @@ if [ ! -f "$DEDRM_MARKER" ]; then
     calibre-customize --add-plugin=/resources/Obok_plugin.zip
 
     echo ">>> Writing DeDRM plugin config (Adobe Wine Prefix: $WINEPREFIX)..."
-    mkdir -p "$CALIBRE_CONFIG/calibre/plugins"
+    mkdir -p "$CALIBRE_CONFIG/plugins"
     cat > "$DEDRM_MARKER" <<JSON
 {
-    "adobewineprefix": "${WINEPREFIX}"
+  "adeptkeys": {},
+  "adobe_pdf_passphrases": [],
+  "androidkeys": {},
+  "adobewineprefix": "${WINEPREFIX}",
+  "bandnkeys": {},
+  "configured": true,
+  "ereaderkeys": {},
+  "kindlekeys": {},
+  "kindlewineprefix": "",
+  "lcp_passphrases": [],
+  "pids": [],
+  "serials": []
 }
 JSON
 fi
 
 # ── Phase 6: dispatch ───────────────────────────────────────────────────────
-CMD="${1:-gui}"
-
 case "$CMD" in
     decrypt)
         # Usage: decrypt <input.epub> [output_dir]

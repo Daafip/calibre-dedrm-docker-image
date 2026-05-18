@@ -3,6 +3,7 @@ services:
     build: .
     image: calibre-adept
     container_name: calibre-adept
+    ipc: host
     stdin_open: true
     tty: true
     environment:
@@ -15,4 +16,5 @@ services:
       - ./volumes/wineprefix:/home/calibre/wineprefix
       - ./volumes/calibre-config:/home/calibre/calibre-config
       - ./volumes/books:/home/calibre/books
+      - ./volumes/winetricks-cache:/home/calibre/.cache/winetricks
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
