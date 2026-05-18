@@ -1,0 +1,18 @@
+services:
+  calibre:
+    build: .
+    image: calibre-adept
+    container_name: calibre-adept
+    stdin_open: true
+    tty: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - WINEARCH=win32
+      - WINEPREFIX=/home/calibre/wineprefix
+      - CALIBRE_CONFIG_DIRECTORY=/home/calibre/calibre-config
+      - BOOKS_DIR=/home/calibre/books
+    volumes:
+      - ./volumes/wineprefix:/home/calibre/wineprefix
+      - ./volumes/calibre-config:/home/calibre/calibre-config
+      - ./volumes/books:/home/calibre/books
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
