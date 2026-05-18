@@ -7,7 +7,12 @@ CALIBRE_CONFIG="${CALIBRE_CONFIG_DIRECTORY:-/home/calibre/calibre-config}"
 
 PYTHON_EXE="$WINEPREFIX/drive_c/users/calibre/AppData/Local/Programs/Python/Python312-32/python.exe"
 ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.5/DigitalEditions.exe"
+ADE_BOOKS_DIR="$WINEPREFIX/drive_c/users/calibre/Documents/My Digital Editions"
 DEDRM_MARKER="$CALIBRE_CONFIG/plugins/dedrm.json"
+
+# Expose ADE's book library as a stable short path for Calibre to browse
+mkdir -p "$ADE_BOOKS_DIR"
+ln -sfn "$ADE_BOOKS_DIR" /home/calibre/ade-books
 
 # Use Xvfb when no real display is available (headless bootstrap)
 if [ -z "${DISPLAY:-}" ]; then
@@ -129,6 +134,9 @@ case "$CMD" in
         echo ">>> Exporting decrypted file(s) to: $OUTPUT_DIR"
         calibredb export --all --to-dir "$OUTPUT_DIR" --single-dir --with-library "$TMPLIB"
         echo ">>> Done."
+        ;;
+    ade)
+        exec wine "$ADE_EXE"
         ;;
     gui)
         exec calibre
