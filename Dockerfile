@@ -18,7 +18,9 @@ RUN dpkg --add-architecture i386 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN userdel -r ubuntu 2>/dev/null || true; \
-    useradd -m -u 1000 calibre
+    useradd -m -u 1000 calibre && \
+    mkdir -p /home/calibre/.cache/mesa_shader_cache && \
+    chown -R calibre:calibre /home/calibre/.cache
 
 ENV WINEARCH=win32 \
     WINEPREFIX=/home/calibre/wineprefix \

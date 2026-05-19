@@ -16,6 +16,6 @@ services:
       - ./volumes/wineprefix:/home/calibre/wineprefix
       - ./volumes/calibre-config:/home/calibre/calibre-config
       - ./volumes/books:/home/calibre/books
+      - ./volumes/ade-books:/home/calibre/ade-books-input
       - ./volumes/winetricks-cache:/home/calibre/.cache/winetricks
-      - ./volumes/ade-books:/home/calibre/wineprefix/drive_c/users/calibre/Documents/My Digital Editions
       - /tmp/.X11-unix:/tmp/.X11-unix:ro

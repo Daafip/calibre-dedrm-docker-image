@@ -35,7 +35,7 @@ docker compose run --rm calibre
 
 The entrypoint will automatically:
 1. Initialize a 32-bit Wine prefix
-2. Install `dotnet40`, `corefonts`, `tahoma`, `windowscodecs` and set Windows 7 mode via winetricks
+2. Install `dotnet48`, `corefonts`, `tahoma` and set Windows 10 mode via winetricks
 3. Install Python 3.12 (32-bit) and `pycryptodome`
 4. Install Adobe Digital Editions (a GUI window will open)
 5. Pause and ask you to authorize ADE with your Adobe ID and open one DRM'd ebook
@@ -45,6 +45,29 @@ After setup completes, the Wine prefix and Calibre config are persisted in `./vo
 
 ## Usage
 
+### Full pipeline: ASCM → decrypted epub (one command)
+
+Drop the `.acsm` file into `./volumes/ade-books/`, then:
+
+```bash
+docker compose run --rm calibre dedrm /home/calibre/ade-books-input/book.acsm
+```
+
+This opens ADE in the background, waits for the download to complete, kills ADE, then decrypts the epub via DeDRM. The decrypted file lands in `./volumes/books/`.
+
+Optional second argument to change the output directory:
+
+```bash
+docker compose run --rm calibre dedrm /home/calibre/ade-books/book.acsm /home/calibre/ade-books
+```
+
+### Open ADE manually (e.g. to authorize or browse your library)
+
+```bash
+xhost +local:docker
+docker compose run --rm calibre ade
+```
+
 ### Launch Calibre GUI
 
 ```bash
@@ -52,13 +75,11 @@ xhost +local:docker
 docker compose run --rm calibre
 ```
 
-### Decrypt a single ebook from the command line
+### Decrypt an already-downloaded epub
 
 ```bash
-docker compose run --rm calibre decrypt /home/calibre/books/input.epub
+docker compose run --rm calibre decrypt /home/calibre/ade-books/input.epub
 ```
-
-Drop the DRM'd file into `./volumes/books/` first (it's mounted as `/home/calibre/books` inside the container). The decrypted output lands in the same directory.
 
 ### Open a shell inside the container
 
@@ -72,15 +93,18 @@ docker compose run --rm calibre shell
 volumes/
 ├── wineprefix/       # ADE authorization + Python — do not wipe without erasing ADE auth first
 ├── calibre-config/   # Calibre library and plugin config
-└── books/            # Drop DRM'd files here; decrypted output comes out here too
+├── books/            # Decrypted output
+├── ade-books/        # Drop .acsm files here; ADE downloads epubs here too
+└── winetricks-cache/ # Speeds up rebuilds
 ```
 
 ## Known gotchas
 
 - **Wine prefix must stay win32.** `WINEARCH=win32` everywhere. If you see `syswow64\ntdll.dll error c0000135`, the prefix went 64-bit — erase ADE auth first (`Help → Erase Authorization`), then delete `volumes/wineprefix/` and start over.
-- **Python must be 32-bit.** The `-amd64` filename is wrong. DeDRM probes for `python.exe` and rejects non-3.x; `PrependPath=1` is required during silent install.
+- **Python must be 32-bit.** The `-amd64` filename is wrong. DeDRM probes for `python.exe` and rejects non-3.x; the Windows PATH registry entry must be set correctly.
 - **`corefonts` + `tahoma` are mandatory.** Without them ADE crashes in `FontFamily.get_FirstFontFamily()`.
-- **Windows 7 mode is required.** ADE 4.5 won't run on the default XP setting.
+- **Windows 10 mode is required.** ADE needs Win7+, Python 3.12 needs Win8+. Win10 satisfies both.
+- **`windowscodecs` must not be installed.** Wine 9 ships its own WIC; the native override breaks the prefix.
 - **ADE 4.5 vs 4.0.3.** If 4.5 refuses to authorize under Wine 9.x, rebuild with `ADE_4.0.3_Installer.exe`. The plugin doesn't care which version produced the key.
 - **`ntlm_auth not found` warnings are noise** — silenced by the `winbind` package in the image.
 - **First Calibre import failure after setup** usually means the plugin's Wine Prefix path is wrong. It must be the container path `/home/calibre/wineprefix`, not the host path.
@@ -90,3 +114,10 @@ volumes/
 - [noDRM DeDRM_tools](https://github.com/noDRM/DeDRM_tools)
 - [DeDRM FAQs](https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md)
 - [Winetricks](https://github.com/Winetricks/winetricks)
+
+
+## example 
+
+```bash
+docker compose run --rm calibre dedrm /home/calibre/ade-books-input/de_machtscode.acsm
+``` 
