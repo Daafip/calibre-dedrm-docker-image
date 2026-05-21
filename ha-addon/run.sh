@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Prefix every line of output with a timestamp
+exec > >(while IFS= read -r _line; do printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$_line"; done) 2>&1
+
 # ── Home Assistant addon options ─────────────────────────────────────────────
 OPTIONS=/data/options.json
 ADOBE_EMAIL=$(jq --raw-output '.adobe_email // empty' "$OPTIONS" 2>/dev/null || true)
@@ -34,7 +37,7 @@ mkdir -p "$ADE_BOOKS_DIR" "$ADE_BOOKS_DIR/Manifest" "$ADE_BOOKS_DIR/Tags"
 mkdir -p /root/.cache/mesa_shader_cache 2>/dev/null || true
 
 # ── Xvfb (always headless in HA) ─────────────────────────────────────────────
-Xvfb :99 -screen 0 1024x768x24 -nolisten tcp &
+Xvfb :99 -screen 0 1024x768x24 -nolisten tcp 2>/dev/null &
 XVFB_PID=$!
 export DISPLAY=:99
 trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
@@ -51,17 +54,19 @@ if [ ! -f "$WINETRICKS_DONE" ]; then
         case "$WINEPREFIX_SNAPSHOT" in
             http://*|https://*)
                 wget -q --show-progress -O /tmp/snapshot.tar.gz "$WINEPREFIX_SNAPSHOT"
-                tar -xzf /tmp/snapshot.tar.gz -C "$(dirname "$WINEPREFIX")"
+                tar --no-same-owner -xzf /tmp/snapshot.tar.gz -C "$(dirname "$WINEPREFIX")"
                 rm -f /tmp/snapshot.tar.gz
                 ;;
             *)
-                tar -xzf "$WINEPREFIX_SNAPSHOT" -C "$(dirname "$WINEPREFIX")"
+                tar --no-same-owner -xzf "$WINEPREFIX_SNAPSHOT" -C "$(dirname "$WINEPREFIX")"
                 ;;
         esac
+        chown -R root:root "$WINEPREFIX"
         echo ">>> Snapshot restored."
     elif [ -d "/wineprefix-base" ]; then
         echo ">>> Copying pre-built wineprefix from image (first run)..."
         cp -a /wineprefix-base/. "$WINEPREFIX/"
+        chown -R root:root "$WINEPREFIX"
         echo ">>> Wineprefix ready."
     else
         echo ">>> No pre-built prefix found — building from scratch (this takes 10–20 min)..."
