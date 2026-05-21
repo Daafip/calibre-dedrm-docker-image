@@ -1,0 +1,33 @@
+name: "Calibre DeDRM"
+description: >
+  Watches /share/calibre-dedrm/input for .acsm files and converts them to
+  DRM-free ePubs using Adobe Digital Editions + Calibre DeDRM under Wine.
+  Output lands in /share/calibre-dedrm/books.
+version: "1.0.0"
+slug: "calibre_dedrm"
+init: false
+arch:
+  - amd64
+
+# Persistent addon data (/data) and HA shared storage (/share)
+map:
+  - share:rw
+  - data:rw
+
+options:
+  # Headless ADE authorization — set both to authorize without a GUI.
+  # Leave empty if using wineprefix_snapshot instead.
+  adobe_email: ""
+  adobe_password: ""
+  # Path inside the container to a wineprefix tarball, or an https:// URL.
+  # If set and /data/wineprefix is empty, the tarball is extracted on first run.
+  # Create the snapshot on an authorized machine with:
+  #   tar -czf wineprefix-authorized.tar.gz -C volumes wineprefix/
+  # Then place it in /share/calibre-dedrm/ and set:
+  #   wineprefix_snapshot: /share/calibre-dedrm/wineprefix-authorized.tar.gz
+  wineprefix_snapshot: ""
+
+schema:
+  adobe_email: email
+  adobe_password: password
+  wineprefix_snapshot: str

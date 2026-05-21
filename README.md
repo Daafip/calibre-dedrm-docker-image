@@ -154,7 +154,38 @@ volumes/
 - **`ntlm_auth not found` warnings are noise** — silenced by the `winbind` package in the image.
 - **First Calibre import failure after setup** usually means the plugin's Wine Prefix path is wrong. It must be the container path `/home/calibre/wineprefix`, not the host path.
 
-## References
+## Home Assistant addon
+
+The `ha-addon/` directory contains a Home Assistant addon that runs as a persistent service, watching `/share/calibre-dedrm/input` for `.acsm` files and decrypting them automatically.
+
+**Architecture note:** Wine only runs on `amd64`. The addon will not install on Raspberry Pi or other ARM devices.
+
+### Install
+
+1. In HA → **Settings → Add-ons → Add-on Store** → three-dot menu → **Repositories**, add the URL of this GitHub repo.
+2. Find "Calibre DeDRM" in the store and install it.
+3. Before starting, place `ADE_4.0.3_Installer.exe` (from Adobe's website) in `/share/calibre-dedrm/resources/` on the HA host.
+4. Configure the addon (see below), then start it.
+
+First start takes 10-20 minutes: winetricks, Python, and ADE all install from scratch. Subsequent starts are instant (data persists in the addon's `/data/` volume).
+
+### Configuration
+
+In the addon's **Configuration** tab:
+
+| Option | Description |
+| --- | --- |
+| `adobe_email` | Adobe ID email — used for headless ADE authorization |
+| `adobe_password` | Adobe ID password — leave empty if using a snapshot |
+| `wineprefix_snapshot` | Path or URL to a pre-authorized wineprefix tarball (see snapshot instructions above) |
+
+The snapshot path must be accessible inside the container, e.g. `/share/calibre-dedrm/wineprefix-authorized.tar.gz` if you placed the file in `/share/calibre-dedrm/` on the HA host.
+
+### Usage
+
+Drop `.acsm` files into `/share/calibre-dedrm/input/` (accessible from the HA host at `/share/calibre-dedrm/input/` or via the Samba/SSH addon). The addon processes each file within 30 seconds and writes the decrypted ePub to `/share/calibre-dedrm/books/`. Failed files are renamed to `.failed`.
+
+## Links
 
 - [noDRM DeDRM_tools](https://github.com/noDRM/DeDRM_tools)
 - [DeDRM FAQs](https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md)
