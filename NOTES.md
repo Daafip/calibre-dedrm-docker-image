@@ -72,6 +72,50 @@ volumes/
 - **DeDRM `wine python.exe` returns "not python3"**: Wine uses ShellExecute for name-based executable lookup, which fails for console apps. The entrypoint patches `wineutils.py` in the DeDRM plugin zip to use the full path (`C:\users\calibre\...\python.exe`), which forces CreateProcess and works correctly.
 - **Do not mount `ade-books` inside the wineprefix path**: a Docker bind mount inside another bind mount hides the existing directory contents, breaking ADE's library state. The `ade-books-input` volume is mounted separately at `/home/calibre/ade-books-input` for dropping in ACSM input files.
 
+## Headless authorization
+
+Three strategies, in order of reliability:
+
+### Strategy 1 — Snapshot restore (`WINEPREFIX_SNAPSHOT`)
+
+Authorize once interactively, then tar the result:
+
+```bash
+docker compose down
+tar -czf wineprefix-authorized.tar.gz -C volumes wineprefix/
+```
+
+On any new host (including Home Assistant), set the env var and run normally:
+
+```bash
+WINEPREFIX_SNAPSHOT=/path/to/wineprefix-authorized.tar.gz docker compose run --rm calibre dedrm ...
+# or via .env / docker-compose.yml environment section
+# also accepts https:// URLs
+```
+
+The tarball is extracted on the first run when `$WINEPREFIX/.winetricks_done` is absent. All subsequent runs skip the restore. **Treat as secret** — it contains the device key tied to your Adobe ID.
+
+### Strategy 2 — Headless credentials (`ADOBE_EMAIL` + `ADOBE_PASSWORD`)
+
+Set in `.env` or HA secrets store:
+
+```ini
+ADOBE_EMAIL=you@example.com
+ADOBE_PASSWORD=yourpassword
+```
+
+The entrypoint installs ADE silently (`/S` NSIS flag), starts it under Xvfb, and automates the **Help → Authorize Computer** dialog via xdotool (`alt+h → a → Tab/type/Return`). Polls the Wine registry for the ADEPT activation key for up to 60 s.
+
+**Caveat:** depends on ADE 4.0.3's menu layout. If the key sequence doesn't land on "Authorize Computer...", the automation silently fails and logs a warning — fall back to Option B or snapshot.
+
+### Authorization check
+
+`ade_is_authorized()` greps `$WINEPREFIX/user.reg` for the `Adept\Activation` registry key. Runs on every startup; skips all auth logic if already authorized.
+
+### ADE install is now silent
+
+`wine "$ADE_INSTALLER" /S` — NSIS silent flag, no GUI click-through needed. ADE installs to its default path under the Wine prefix. A `sleep 10` follows to let the installer finish before checking for the executable.
+
 ## Reference
 
 - [noDRM DeDRM_tools](https://github.com/noDRM/DeDRM_tools)
