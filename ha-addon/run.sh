@@ -83,7 +83,9 @@ if [ ! -f "$PYTHON_EXE" ]; then
         exit 1
     fi
     echo ">>> Installing Python 3.12 (32-bit)..."
-    wine "$PY_INSTALLER" /quiet PrependPath=1 Include_doc=0
+    cp "$PY_INSTALLER" /tmp/python-installer.exe
+    wine /tmp/python-installer.exe /quiet PrependPath=1 Include_doc=0
+    rm -f /tmp/python-installer.exe
     echo ">>> Installing pycryptodome..."
     wine "$PYTHON_EXE" -m pip install --quiet pycryptodome
 fi
@@ -168,7 +170,9 @@ if [ ! -f "$ADE_EXE" ]; then
         exit 1
     fi
     echo ">>> Installing Adobe Digital Editions (silent)..."
-    WINEDEBUG=-all wine "$ADE_INSTALLER" /S 2>/dev/null
+    cp "$ADE_INSTALLER" /tmp/ADE_installer.exe
+    WINEDEBUG=-all wine /tmp/ADE_installer.exe /S 2>/dev/null
+    rm -f /tmp/ADE_installer.exe
     sleep 10
     ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.0/DigitalEditions.exe"
     [ ! -f "$ADE_EXE" ] && ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.5/DigitalEditions.exe"
