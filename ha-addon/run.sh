@@ -43,30 +43,33 @@ trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
 wine reg add "HKCU\\SOFTWARE\\Microsoft\\Avalon.Graphics" \
     /v DisableHWAcceleration /t REG_DWORD /d 1 /f 2>/dev/null || true
 
-# ── Strategy 1: Restore wineprefix from snapshot ─────────────────────────────
-if [ -n "${WINEPREFIX_SNAPSHOT:-}" ] && [ ! -f "$WINETRICKS_DONE" ]; then
-    echo ">>> Restoring wineprefix from snapshot: $(basename "$WINEPREFIX_SNAPSHOT")"
-    case "$WINEPREFIX_SNAPSHOT" in
-        http://*|https://*)
-            wget -q --show-progress -O /tmp/snapshot.tar.gz "$WINEPREFIX_SNAPSHOT"
-            tar -xzf /tmp/snapshot.tar.gz -C "$(dirname "$WINEPREFIX")"
-            rm -f /tmp/snapshot.tar.gz
-            ;;
-        *)
-            tar -xzf "$WINEPREFIX_SNAPSHOT" -C "$(dirname "$WINEPREFIX")"
-            ;;
-    esac
-    echo ">>> Snapshot restored."
-fi
-
-# ── Phase 2: Wine prefix bootstrap ───────────────────────────────────────────
+# ── First-run: populate /data/wineprefix ─────────────────────────────────────
+# Priority: user snapshot > image pre-built prefix > build from scratch (fallback)
 if [ ! -f "$WINETRICKS_DONE" ]; then
-    echo ">>> Initializing Wine prefix (win32) — this takes several minutes on first run..."
-    wineboot --init
-    echo ">>> Installing Windows components via winetricks..."
-    winetricks -q dotnet48 corefonts tahoma
-    winetricks -q win10
-    touch "$WINETRICKS_DONE"
+    if [ -n "${WINEPREFIX_SNAPSHOT:-}" ]; then
+        echo ">>> Restoring wineprefix from snapshot: $(basename "$WINEPREFIX_SNAPSHOT")"
+        case "$WINEPREFIX_SNAPSHOT" in
+            http://*|https://*)
+                wget -q --show-progress -O /tmp/snapshot.tar.gz "$WINEPREFIX_SNAPSHOT"
+                tar -xzf /tmp/snapshot.tar.gz -C "$(dirname "$WINEPREFIX")"
+                rm -f /tmp/snapshot.tar.gz
+                ;;
+            *)
+                tar -xzf "$WINEPREFIX_SNAPSHOT" -C "$(dirname "$WINEPREFIX")"
+                ;;
+        esac
+        echo ">>> Snapshot restored."
+    elif [ -d "/wineprefix-base" ]; then
+        echo ">>> Copying pre-built wineprefix from image (first run)..."
+        cp -a /wineprefix-base/. "$WINEPREFIX/"
+        echo ">>> Wineprefix ready."
+    else
+        echo ">>> No pre-built prefix found — building from scratch (this takes 10–20 min)..."
+        wineboot --init
+        winetricks -q dotnet48 corefonts tahoma
+        winetricks -q win10
+        touch "$WINETRICKS_DONE"
+    fi
 fi
 
 # ── Phase 3: Python 3.12 (32-bit) + pycryptodome ─────────────────────────────
@@ -314,22 +317,39 @@ fi
 
 # ── send2ereader helpers ──────────────────────────────────────────────────────
 
-# Upload an epub to send2ereader with a client-generated 4-char code.
-# The book is then available at http://<host>:3001/<CODE> for the Kobo to download.
+# Upload an epub to send2ereader.
+# Flow: POST /generate → get server-registered code, POST /upload → store file,
+# GET /status/:code → retrieve download URL.
+# Returns the download URL on success, empty string on failure.
 push_to_send2ereader() {
     local epub="$1" base_url="${2%/}"
-    local CODE STATUS
-    # Client generates the key (alphanumeric, uppercase, 4 chars)
-    CODE=$(tr -dc 'A-Z0-9' </dev/urandom 2>/dev/null | head -c 4)
-    STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+    local COOKIEJAR
+    COOKIEJAR=$(mktemp)
+
+    # Step 1: register a code — server ties the key to this cookie session
+    local CODE
+    CODE=$(curl -sf -c "$COOKIEJAR" -X POST "$base_url/generate" 2>/dev/null || true)
+    if [ -z "$CODE" ]; then
+        rm -f "$COOKIEJAR"; echo "" ; return
+    fi
+
+    # Step 2: upload — must present the same cookie or the key is expired immediately
+    local STATUS
+    STATUS=$(curl -sf -b "$COOKIEJAR" -o /dev/null -w "%{http_code}" \
         -F "key=$CODE" \
         -F "file=@$epub;type=application/epub+zip" \
         "$base_url/upload" 2>/dev/null || echo "000")
-    if [ "$STATUS" = "200" ]; then
-        echo "$CODE"
-    else
-        echo ""
+    rm -f "$COOKIEJAR"
+    if [ "$STATUS" != "200" ]; then
+        echo "" ; return
     fi
+
+    # Step 3: get the download URL from the status endpoint
+    local DOWNLOAD_URL
+    DOWNLOAD_URL=$(curl -sf "$base_url/status/$CODE" 2>/dev/null \
+        | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('urls',[''])[0])" \
+        2>/dev/null || true)
+    echo "${DOWNLOAD_URL:-$base_url/$CODE}"
 }
 
 # Send an HA notification via the Supervisor REST API (no user token needed —
@@ -344,6 +364,10 @@ notify_ha() {
         -d "{\"title\": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$title"), \"message\": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$message")}" \
         "http://supervisor/core/api/services/notify/$service" >/dev/null || true
 }
+
+# ── Upload server (HA ingress) ────────────────────────────────────────────────
+INPUT_DIR="$INPUT_DIR" INGRESS_PORT="${INGRESS_PORT:-8099}" \
+    python3 /upload_server.py &
 
 # ── Service loop ──────────────────────────────────────────────────────────────
 echo ">>> Setup complete. Watching $INPUT_DIR for .acsm files (every 30 s)..."
@@ -411,16 +435,14 @@ process_acsm() {
         # Push to send2ereader if configured
         if [ -n "${SEND2EREADER_URL:-}" ] && [ -n "${EXPORTED_EPUB:-}" ]; then
             echo ">>> Uploading to send2ereader..."
-            local CODE
-            CODE=$(push_to_send2ereader "$EXPORTED_EPUB" "$SEND2EREADER_URL")
-            if [ -n "$CODE" ]; then
-                local DOWNLOAD_URL="${SEND2EREADER_URL%/}/$CODE"
+            local DOWNLOAD_URL
+            DOWNLOAD_URL=$(push_to_send2ereader "$EXPORTED_EPUB" "$SEND2EREADER_URL")
+            if [ -n "$DOWNLOAD_URL" ]; then
                 echo "┌──────────────────────────────────────────┐"
                 echo "│  Book ready on Kobo                      │"
-                echo "│  Code : $CODE                            │"
                 echo "│  URL  : $DOWNLOAD_URL"
                 echo "└──────────────────────────────────────────┘"
-                notify_ha "Book ready" "Code: $CODE — $DOWNLOAD_URL" "${NOTIFY_SERVICE:-}"
+                notify_ha "Book ready" "$DOWNLOAD_URL" "${NOTIFY_SERVICE:-}"
             else
                 echo ">>> WARNING: send2ereader upload failed (is it running at $SEND2EREADER_URL?)"
             fi

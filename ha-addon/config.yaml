@@ -6,6 +6,8 @@ description: >
 version: "1.0.0"
 slug: "calibre_dedrm"
 init: false
+ingress: true
+ingress_port: 8099
 arch:
   - amd64
 

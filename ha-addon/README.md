@@ -66,7 +66,11 @@ Not available via the HA add-on. Use the standalone `docker-compose.yml` on a de
 
 ## Usage
 
-Drop `.acsm` files into `/share/calibre-dedrm/input/`. The add-on checks every 30 seconds, processes each file, and writes the decrypted ePub to `/share/calibre-dedrm/books/`. Files that fail are renamed to `.failed`.
+**Browser upload (recommended):** Open the add-on's web UI via the **Open Web UI** button in the HA sidebar. Select an `.acsm` file and click Upload — it will appear in the input queue and be processed within 30 seconds.
+
+**Manual drop:** Place `.acsm` files directly into `/share/calibre-dedrm/input/` via SSH, Samba, or the HA File Editor add-on.
+
+The add-on checks every 30 seconds, processes each file, and writes the decrypted ePub to `/share/calibre-dedrm/books/`. Files that fail are renamed to `.failed`.
 
 If `send2ereader_url` is set, the ePub is also pushed there automatically and the short code is logged and optionally sent as an HA notification.
 
