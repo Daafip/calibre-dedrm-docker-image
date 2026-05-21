@@ -58,7 +58,7 @@ This opens ADE in the background, waits for the download to complete, kills ADE,
 Optional second argument to change the output directory:
 
 ```bash
-docker compose run --rm calibre dedrm /home/calibre/ade-books/book.acsm /home/calibre/ade-books
+docker compose run --rm calibre dedrm /home/calibre/ade-books-input/book.acsm /home/calibre/ade-books-input
 ```
 
 ### Open ADE manually (e.g. to authorize or browse your library)
@@ -78,7 +78,7 @@ docker compose run --rm calibre
 ### Decrypt an already-downloaded epub
 
 ```bash
-docker compose run --rm calibre decrypt /home/calibre/ade-books/input.epub
+docker compose run --rm calibre decrypt /home/calibre/ade-books-input/input.epub
 ```
 
 ### Open a shell inside the container
@@ -114,10 +114,3 @@ volumes/
 - [noDRM DeDRM_tools](https://github.com/noDRM/DeDRM_tools)
 - [DeDRM FAQs](https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md)
 - [Winetricks](https://github.com/Winetricks/winetricks)
-
-
-## example 
-
-```bash
-docker compose run --rm calibre dedrm /home/calibre/ade-books-input/de_machtscode.acsm
-``` 
