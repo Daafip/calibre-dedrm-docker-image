@@ -6,6 +6,8 @@ OPTIONS=/data/options.json
 ADOBE_EMAIL=$(jq --raw-output '.adobe_email // empty' "$OPTIONS" 2>/dev/null || true)
 ADOBE_PASSWORD=$(jq --raw-output '.adobe_password // empty' "$OPTIONS" 2>/dev/null || true)
 WINEPREFIX_SNAPSHOT=$(jq --raw-output '.wineprefix_snapshot // empty' "$OPTIONS" 2>/dev/null || true)
+SEND2EREADER_URL=$(jq --raw-output '.send2ereader_url // empty' "$OPTIONS" 2>/dev/null || true)
+NOTIFY_SERVICE=$(jq --raw-output '.notify_service // empty' "$OPTIONS" 2>/dev/null || true)
 
 INPUT_DIR="/share/calibre-dedrm/input"
 OUTPUT_DIR="/share/calibre-dedrm/books"
@@ -190,15 +192,23 @@ find_plugin() {
     local name="$1"
     # Prefer build-time bundle in /resources/, fall back to user-supplied share dir,
     # then download from noDRM GitHub releases.
+    # All diagnostic output goes to stderr so $() captures only the path.
     local found
-    found=$(ls "/resources/$name" "$RESOURCES_DIR/$name" 2>/dev/null | head -1 || true)
+    found=$(ls "/resources/$name" "$RESOURCES_DIR/$name" 2>/dev/null \
+        | while IFS= read -r f; do [ -s "$f" ] && echo "$f"; done \
+        | head -1 || true)
     if [ -z "$found" ]; then
-        echo ">>> $name not found locally — downloading from noDRM GitHub..."
+        echo ">>> $name not found locally — downloading from noDRM GitHub..." >&2
         mkdir -p /resources
-        wget -q -O "/resources/$name" \
-            "https://github.com/noDRM/DeDRM_tools/releases/download/v10.0.3/$name" \
-            && found="/resources/$name" \
-            || { echo "ERROR: Could not download $name."; exit 1; }
+        if wget -q -O "/resources/$name" \
+                "https://github.com/noDRM/DeDRM_tools/releases/download/v10.0.3/$name" \
+           && [ -s "/resources/$name" ]; then
+            found="/resources/$name"
+        else
+            rm -f "/resources/$name"
+            echo "ERROR: Could not download $name." >&2
+            exit 1
+        fi
     fi
     echo "$found"
 }
@@ -302,9 +312,43 @@ print('>>> ADEPT key cached — DeDRM will use it directly.')
     rm -rf "$KEYDIR"
 fi
 
+# ── send2ereader helpers ──────────────────────────────────────────────────────
+
+# Upload an epub to send2ereader with a client-generated 4-char code.
+# The book is then available at http://<host>:3001/<CODE> for the Kobo to download.
+push_to_send2ereader() {
+    local epub="$1" base_url="${2%/}"
+    local CODE STATUS
+    # Client generates the key (alphanumeric, uppercase, 4 chars)
+    CODE=$(tr -dc 'A-Z0-9' </dev/urandom 2>/dev/null | head -c 4)
+    STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+        -F "key=$CODE" \
+        -F "file=@$epub;type=application/epub+zip" \
+        "$base_url/upload" 2>/dev/null || echo "000")
+    if [ "$STATUS" = "200" ]; then
+        echo "$CODE"
+    else
+        echo ""
+    fi
+}
+
+# Send an HA notification via the Supervisor REST API (no user token needed —
+# the Supervisor injects $SUPERVISOR_TOKEN automatically for every addon).
+notify_ha() {
+    local title="$1" message="$2" service="${3:-}"
+    [ -z "$service" ] && return 0
+    [ -z "${SUPERVISOR_TOKEN:-}" ] && return 0
+    curl -sf \
+        -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"title\": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$title"), \"message\": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$message")}" \
+        "http://supervisor/core/api/services/notify/$service" >/dev/null || true
+}
+
 # ── Service loop ──────────────────────────────────────────────────────────────
 echo ">>> Setup complete. Watching $INPUT_DIR for .acsm files (every 30 s)..."
 echo "    Output: $OUTPUT_DIR"
+[ -n "${SEND2EREADER_URL:-}" ] && echo "    send2ereader: $SEND2EREADER_URL"
 
 process_acsm() {
     local ACSM_FILE="$1"
@@ -351,13 +395,36 @@ process_acsm() {
     fi
 
     if [ -n "${NEW_FILE:-}" ]; then
-        local TMPLIB
+        local TMPLIB EXPORT_MARKER
         TMPLIB=$(mktemp -d)
+        EXPORT_MARKER=$(mktemp)
         calibredb add "$NEW_FILE" --with-library "$TMPLIB"
         calibredb export --all --to-dir "$OUTPUT_DIR" --single-dir --with-library "$TMPLIB"
+        # Find the newly written epub so we can push it to send2ereader
+        local EXPORTED_EPUB
+        EXPORTED_EPUB=$(find "$OUTPUT_DIR" -name "*.epub" -newer "$EXPORT_MARKER" 2>/dev/null | head -1 || true)
+        rm -f "$EXPORT_MARKER"
         rm -rf "$TMPLIB"
         rm -f "$ACSM_FILE"
         echo ">>> Done: $BASENAME → $OUTPUT_DIR"
+
+        # Push to send2ereader if configured
+        if [ -n "${SEND2EREADER_URL:-}" ] && [ -n "${EXPORTED_EPUB:-}" ]; then
+            echo ">>> Uploading to send2ereader..."
+            local CODE
+            CODE=$(push_to_send2ereader "$EXPORTED_EPUB" "$SEND2EREADER_URL")
+            if [ -n "$CODE" ]; then
+                local DOWNLOAD_URL="${SEND2EREADER_URL%/}/$CODE"
+                echo "┌──────────────────────────────────────────┐"
+                echo "│  Book ready on Kobo                      │"
+                echo "│  Code : $CODE                            │"
+                echo "│  URL  : $DOWNLOAD_URL"
+                echo "└──────────────────────────────────────────┘"
+                notify_ha "Book ready" "Code: $CODE — $DOWNLOAD_URL" "${NOTIFY_SERVICE:-}"
+            else
+                echo ">>> WARNING: send2ereader upload failed (is it running at $SEND2EREADER_URL?)"
+            fi
+        fi
     else
         echo ">>> ERROR: Download failed for $BASENAME. Is ADE authorized? Can it reach Adobe's servers?"
         mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true

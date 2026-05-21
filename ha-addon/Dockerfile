@@ -25,11 +25,11 @@ RUN mkdir -p /resources
 
 # Download DeDRM 10.0.3 + Obok from the noDRM GitHub release.
 # These are open source (GPLv3) and freely redistributable.
-# RUN wget -q -O /tmp/dedrm.zip \
-#        "https://github.com/noDRM/DeDRM_tools/releases/download/v10.0.3/DeDRM_tools_10.0.3.zip" \
-#     && unzip -q /tmp/dedrm.zip "DeDRM_Plugin.zip" "Obok_plugin.zip" -d /resources/ \
-#     && rm /tmp/dedrm.zip \
-#     || echo "WARNING: DeDRM download failed — the addon will not work without DeDRM_Plugin.zip."
+RUN wget -q -O /tmp/dedrm.zip \
+       "https://github.com/noDRM/DeDRM_tools/releases/download/v10.0.3/DeDRM_tools_10.0.3.zip" \
+    && unzip -q /tmp/dedrm.zip "DeDRM_Plugin.zip" "Obok_plugin.zip" -d /resources/ \
+    && rm /tmp/dedrm.zip \
+    || echo "WARNING: DeDRM download failed — the addon will not work without DeDRM_Plugin.zip."
 
 # Download 32-bit Python 3.12.7 installer (used by DeDRM to extract the ADEPT key).
 RUN wget -q -O /resources/python-3.12.7.exe \

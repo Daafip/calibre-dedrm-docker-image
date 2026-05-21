@@ -1,0 +1,23 @@
+name: "send2ereader"
+description: >
+  Self-hosted send2ereader server. When the ADE Decrypt addon finishes a book,
+  it posts the ePub here with a short code. Open your Kobo browser, navigate to
+  http://<HA-IP>:3001/<CODE>, and the book downloads directly.
+version: "1.0.0"
+slug: "send2ereader"
+init: false
+arch:
+  - amd64
+  - aarch64
+  - armv7
+
+# Expose port 3001 directly on the host — the Kobo browser needs a plain
+# http://<IP>:3001/<CODE> URL. HA ingress (port 8123 with auth token) does not
+# work from the Kobo's basic WebKit browser.
+ports:
+  3001/tcp: 3001
+ports_description:
+  3001/tcp: "Kobo download endpoint — point your Kobo browser here"
+
+options: {}
+schema: {}

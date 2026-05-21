@@ -26,8 +26,18 @@ options:
   # Then place it in /share/calibre-dedrm/ and set:
   #   wineprefix_snapshot: /share/calibre-dedrm/wineprefix-authorized.tar.gz
   wineprefix_snapshot: ""
+  # After decryption, automatically push the ePub to send2ereader and show
+  # the short code in the addon logs. Set to the send2ereader addon's URL,
+  # e.g. http://homeassistant.local:3001 or http://<HA-IP>:3001
+  # Leave empty to disable.
+  send2ereader_url: ""
+  # HA notification service to ping when a book is ready (e.g. mobile_app_phone).
+  # Uses the Supervisor token — no extra auth needed. Leave empty to disable.
+  notify_service: ""
 
 schema:
   adobe_email: email
   adobe_password: password
   wineprefix_snapshot: str
+  send2ereader_url: str
+  notify_service: str

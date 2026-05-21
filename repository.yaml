@@ -1,3 +1,7 @@
-name: Calibre DeDRM
+name: Calibre DeDRM + send2ereader
 url: https://github.com/Daafip/calibre-dedrm-docker-image
 maintainer: David <daafips@gmail.com>
+
+# Add-ons in this repository:
+#   ha-addon/            — Calibre DeDRM: decrypt ACSM → epub, push to send2ereader
+#   ha-addon-send2ereader/ — send2ereader: serve short-code epub downloads to Kobo
