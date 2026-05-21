@@ -23,23 +23,68 @@ You also need:
 ## First-time setup
 
 ```bash
-# Allow Docker to use the host display
-xhost +local:docker
-
-# Build the image
 docker compose build
+```
 
-# Run first-time setup (Wine prefix initialization + ADE install)
+Then authorize ADE using whichever method fits your environment:
+
+### Option A — headless (servers, Home Assistant, no display)
+
+Set credentials in a `.env` file (keep this file out of version control):
+
+```ini
+ADOBE_EMAIL=you@example.com
+ADOBE_PASSWORD=yourpassword
+```
+
+Then run:
+
+```bash
 docker compose run --rm calibre
 ```
 
-The entrypoint will automatically:
-1. Initialize a 32-bit Wine prefix
-2. Install `dotnet48`, `corefonts`, `tahoma` and set Windows 10 mode via winetricks
-3. Install Python 3.12 (32-bit) and `pycryptodome`
-4. Install Adobe Digital Editions (a GUI window will open)
-5. Pause and ask you to authorize ADE with your Adobe ID and open one DRM'd ebook
-6. Install and configure the DeDRM and Obok plugins into Calibre
+The entrypoint installs ADE silently, opens it under a virtual framebuffer, navigates to **Help → Authorize Computer**, fills in your credentials automatically, and waits for Adobe's servers to confirm. If it works, the prefix is authorized and you never need a display again.
+
+> **Note:** The xdotool automation depends on ADE's menu layout. If it fails, fall back to Option B or C.
+
+### Option B — interactive (desktop, first time only)
+
+```bash
+xhost +local:docker
+docker compose run --rm calibre ade
+# ADE opens — go to Help → Authorize Computer, sign in with Adobe ID
+```
+
+### Option C — snapshot restore (re-deploy from an already-authorized setup)
+
+If you've already authorized on one machine, snapshot the prefix and deploy it anywhere without credentials or a display:
+
+```bash
+# 1. On the authorized machine — create the snapshot
+docker compose down
+tar -czf wineprefix-authorized.tar.gz -C volumes wineprefix/
+# Store the tarball somewhere safe — it contains your device key.
+# Treat it as a secret (equivalent to having your Adobe ID authorized).
+```
+
+```bash
+# 2. On the target machine — restore from snapshot
+# Mount the tarball or use a URL:
+WINEPREFIX_SNAPSHOT=/path/to/wineprefix-authorized.tar.gz docker compose run --rm calibre dedrm ...
+# or set it in .env / docker-compose.yml environment
+```
+
+The snapshot is extracted on the first run when `./volumes/wineprefix/` is empty, then all subsequent runs skip the restore. The tarball is ~300 MB.
+
+---
+
+Regardless of which option you use, the entrypoint automatically:
+
+1. Initializes a 32-bit Wine prefix
+2. Installs `dotnet48`, `corefonts`, `tahoma`, sets Windows 10 mode
+3. Installs Python 3.12 (32-bit) and `pycryptodome`
+4. Installs Adobe Digital Editions silently
+5. Installs and configures the DeDRM and Obok plugins into Calibre
 
 After setup completes, the Wine prefix and Calibre config are persisted in `./volumes/` and reused on every subsequent run.
 

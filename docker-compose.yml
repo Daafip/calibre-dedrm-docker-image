@@ -12,6 +12,13 @@ services:
       - WINEPREFIX=/home/calibre/wineprefix
       - CALIBRE_CONFIG_DIRECTORY=/home/calibre/calibre-config
       - BOOKS_DIR=/home/calibre/books
+      # Headless auth: set to authorize ADE without a GUI.
+      # Treat as secrets — use a .env file or HA secrets store.
+      - ADOBE_EMAIL=${ADOBE_EMAIL:-}
+      - ADOBE_PASSWORD=${ADOBE_PASSWORD:-}
+      # Snapshot restore: path inside the container (mount a volume) or https:// URL.
+      # If set and the wineprefix is empty, extracts the tarball on first run.
+      - WINEPREFIX_SNAPSHOT=${WINEPREFIX_SNAPSHOT:-}
     volumes:
       - ./volumes/wineprefix:/home/calibre/wineprefix
       - ./volumes/calibre-config:/home/calibre/calibre-config

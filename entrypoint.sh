@@ -34,8 +34,27 @@ fi
 wine reg add "HKCU\\SOFTWARE\\Microsoft\\Avalon.Graphics" \
     /v DisableHWAcceleration /t REG_DWORD /d 1 /f 2>/dev/null || true
 
-# ── Phase 2: Wine prefix bootstrap ─────────────────────────────────────────
+# ── Strategy 1: Restore wineprefix from snapshot ────────────────────────────
+# Set WINEPREFIX_SNAPSHOT to a local container path or https:// URL.
+# Only runs when the prefix is not yet initialised (no .winetricks_done marker).
 WINETRICKS_DONE="$WINEPREFIX/.winetricks_done"
+WINEPREFIX_SNAPSHOT="${WINEPREFIX_SNAPSHOT:-}"
+if [ -n "$WINEPREFIX_SNAPSHOT" ] && [ ! -f "$WINETRICKS_DONE" ]; then
+    echo ">>> Restoring wineprefix from snapshot: $(basename "$WINEPREFIX_SNAPSHOT")"
+    case "$WINEPREFIX_SNAPSHOT" in
+        http://*|https://*)
+            wget -q --show-progress -O /tmp/wineprefix-snapshot.tar.gz "$WINEPREFIX_SNAPSHOT"
+            tar -xzf /tmp/wineprefix-snapshot.tar.gz -C "$(dirname "$WINEPREFIX")"
+            rm -f /tmp/wineprefix-snapshot.tar.gz
+            ;;
+        *)
+            tar -xzf "$WINEPREFIX_SNAPSHOT" -C "$(dirname "$WINEPREFIX")"
+            ;;
+    esac
+    echo ">>> Snapshot restored."
+fi
+
+# ── Phase 2: Wine prefix bootstrap ─────────────────────────────────────────
 if [ ! -f "$WINETRICKS_DONE" ]; then
     echo ">>> Initializing Wine prefix (win32) — takes a few minutes..."
     wineboot --init
@@ -84,6 +103,82 @@ if [ "$CMD" = "bootstrap" ]; then
     exit 0
 fi
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+# Returns 0 if ADE has ADEPT activation data in the Wine registry.
+ade_is_authorized() {
+    grep -q 'Adept\\\\Activation' "$WINEPREFIX/user.reg" 2>/dev/null
+}
+
+# Automate ADE's Help → Authorize Computer dialog via xdotool under Xvfb.
+# Strategy 2: headless auth when ADOBE_EMAIL + ADOBE_PASSWORD are set.
+ade_headless_auth() {
+    local EMAIL="$1" PASSWORD="$2"
+
+    echo ">>> Starting ADE for headless authorization..."
+    WINEDEBUG=-all wine "$ADE_EXE" &
+    local ADE_AUTH_PID=$!
+
+    # Wait up to 30 s for the ADE main window
+    local ADE_WID="" i=0
+    while [ $i -lt 30 ]; do
+        sleep 1
+        ADE_WID=$(xdotool search --name "Adobe Digital Editions" 2>/dev/null | tail -1)
+        [ -n "$ADE_WID" ] && break
+        i=$((i+1))
+    done
+
+    if [ -z "$ADE_WID" ]; then
+        echo ">>> WARNING: ADE window did not appear — headless auth skipped"
+        kill "$ADE_AUTH_PID" 2>/dev/null || true
+        return 1
+    fi
+
+    echo ">>> ADE window ready, navigating to Authorize Computer..."
+    sleep 2
+    xdotool windowfocus --sync "$ADE_WID"
+    xdotool windowraise "$ADE_WID"
+    sleep 0.5
+
+    # Help menu → Authorize Computer...
+    # Alt+H opens Help; 'a' jumps to the first item starting with A = "Authorize Computer..."
+    xdotool key "alt+h" || true
+    sleep 0.8
+    xdotool key "a" || true
+    sleep 2
+
+    # Dialog layout: ID Type dropdown (Adobe ID, default) → Email → Password → Authorize
+    xdotool key "Tab" || true                                  # skip ID type dropdown
+    sleep 0.3
+    xdotool type --clearmodifiers --delay 30 "$EMAIL" || true
+    xdotool key "Tab" || true
+    sleep 0.3
+    xdotool type --clearmodifiers --delay 30 "$PASSWORD" || true
+    xdotool key "Tab" || true
+    sleep 0.3
+    xdotool key "Return" || true
+
+    echo ">>> Credentials submitted, waiting up to 60 s for Adobe servers..."
+    local j=0
+    while [ $j -lt 12 ]; do
+        sleep 5
+        ade_is_authorized && break || true
+        j=$((j+1))
+    done
+
+    kill "$ADE_AUTH_PID" 2>/dev/null || true
+    pkill -f "DigitalEditions" 2>/dev/null || true
+    sleep 2
+
+    if ade_is_authorized; then
+        echo ">>> ADE authorization succeeded."
+    else
+        echo ">>> WARNING: Headless auth did not complete — check credentials."
+        echo "    Tip: run 'docker compose run --rm calibre ade' to authorize interactively."
+        echo "    Or create a snapshot of an already-authorized prefix (see README)."
+    fi
+}
+
 # ── Phase 4: Adobe Digital Editions install ─────────────────────────────────
 if [ ! -f "$ADE_EXE" ]; then
     ADE_INSTALLER=$(ls /resources/ADE_4*.exe 2>/dev/null | head -1)
@@ -93,21 +188,42 @@ if [ ! -f "$ADE_EXE" ]; then
         echo "       Adobe's download page: https://www.adobe.com/solutions/ebook/digital-editions/download.html"
         exit 1
     fi
-    echo ">>> Installing Adobe Digital Editions..."
-    echo "    A GUI window will open — accept defaults and click through."
-    wine "$ADE_INSTALLER"
+    echo ">>> Installing Adobe Digital Editions (silent)..."
+    WINEDEBUG=-all wine "$ADE_INSTALLER" /S 2>/dev/null
+    sleep 10
+    # Re-resolve the exe path now that the installer has run
+    ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.0/DigitalEditions.exe"
+    if [ ! -f "$ADE_EXE" ]; then
+        ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.5/DigitalEditions.exe"
+    fi
+fi
 
-    echo ""
-    echo "┌────────────────────────────────────────────────────────────────────┐"
-    echo "│  ACTION REQUIRED: authorize ADE with your Adobe ID, then open at  │"
-    echo "│  least one DRM-protected ebook. Close ADE when done.              │"
-    echo "│  Press Enter to continue...                                        │"
-    echo "└────────────────────────────────────────────────────────────────────┘"
-    read -r
-
-    echo ""
-    echo "NOTE: Each Adobe ID allows ~6 device authorizations. Use"
-    echo "      Help → Erase Authorization in ADE before wiping the volume."
+# Authorize if needed
+if ! ade_is_authorized; then
+    if [ -n "${ADOBE_EMAIL:-}" ] && [ -n "${ADOBE_PASSWORD:-}" ]; then
+        ade_headless_auth "$ADOBE_EMAIL" "$ADOBE_PASSWORD" || true
+    elif [ "$CMD" != "bootstrap" ]; then
+        echo ""
+        echo "┌────────────────────────────────────────────────────────────────────┐"
+        echo "│  ADE is not yet authorized. Options:                              │"
+        echo "│                                                                    │"
+        echo "│  A — headless (preferred for HA / servers):                       │"
+        echo "│      Set ADOBE_EMAIL + ADOBE_PASSWORD, re-run the container.      │"
+        echo "│                                                                    │"
+        echo "│  B — interactive (requires a display):                            │"
+        echo "│      xhost +local:docker                                          │"
+        echo "│      docker compose run --rm calibre ade                         │"
+        echo "│      Help → Authorize Computer → sign in with Adobe ID            │"
+        echo "│                                                                    │"
+        echo "│  C — snapshot (for re-deploy from an already-authorized setup):   │"
+        echo "│      Set WINEPREFIX_SNAPSHOT to a tarball path or URL.            │"
+        echo "└────────────────────────────────────────────────────────────────────┘"
+        echo ""
+        echo "NOTE: Each Adobe ID allows ~6 device authorizations."
+        echo "      Use Help → Erase Authorization in ADE before wiping the volume."
+    fi
+else
+    echo ">>> ADE is already authorized."
 fi
 
 # ── Phase 5: Calibre + DeDRM plugin ────────────────────────────────────────

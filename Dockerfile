@@ -14,6 +14,7 @@ RUN dpkg --add-architecture i386 \
         winetricks \
         wget \
         winbind \
+        xdotool \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
 
