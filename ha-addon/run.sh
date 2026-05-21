@@ -186,11 +186,30 @@ fi
 # ── Phase 5: Calibre + DeDRM plugin ──────────────────────────────────────────
 mkdir -p "$CALIBRE_CONFIG_DIRECTORY/calibre"
 
+find_plugin() {
+    local name="$1"
+    # Prefer build-time bundle in /resources/, fall back to user-supplied share dir,
+    # then download from noDRM GitHub releases.
+    local found
+    found=$(ls "/resources/$name" "$RESOURCES_DIR/$name" 2>/dev/null | head -1 || true)
+    if [ -z "$found" ]; then
+        echo ">>> $name not found locally — downloading from noDRM GitHub..."
+        mkdir -p /resources
+        wget -q -O "/resources/$name" \
+            "https://github.com/noDRM/DeDRM_tools/releases/download/v10.0.3/$name" \
+            && found="/resources/$name" \
+            || { echo "ERROR: Could not download $name."; exit 1; }
+    fi
+    echo "$found"
+}
+
 if [ ! -f "$DEDRM_MARKER" ]; then
+    DEDRM_ZIP=$(find_plugin DeDRM_Plugin.zip)
+    OBOK_ZIP=$(find_plugin Obok_plugin.zip)
     echo ">>> Installing DeDRM plugin..."
-    calibre-customize --add-plugin=/resources/DeDRM_Plugin.zip
+    calibre-customize --add-plugin="$DEDRM_ZIP"
     echo ">>> Installing Obok plugin..."
-    calibre-customize --add-plugin=/resources/Obok_plugin.zip
+    calibre-customize --add-plugin="$OBOK_ZIP"
     mkdir -p "$CALIBRE_CONFIG_DIRECTORY/plugins"
     cat > "$DEDRM_MARKER" <<JSON
 {

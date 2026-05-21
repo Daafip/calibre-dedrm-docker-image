@@ -116,6 +116,82 @@ The entrypoint installs ADE silently (`/S` NSIS flag), starts it under Xvfb, and
 
 `wine "$ADE_INSTALLER" /S` — NSIS silent flag, no GUI click-through needed. ADE installs to its default path under the Wine prefix. A `sleep 10` follows to let the installer finish before checking for the executable.
 
+## HA addon — local testing (without a real HA install)
+
+Build and run the addon container directly on any amd64 Linux machine. HA's supervisor is not needed — just Docker.
+
+```bash
+# 1. Build the addon image (from repo root)
+docker build -t calibre-dedrm-ha ha-addon/
+
+# 2. Create the directory tree that HA's supervisor would mount
+mkdir -p /tmp/ha-test/data
+mkdir -p /tmp/ha-test/share/calibre-dedrm/{input,books,resources}
+
+# 3. Write the options.json that HA would inject
+cat > /tmp/ha-test/data/options.json <<'EOF'
+{
+  "adobe_email": "you@example.com",
+  "adobe_password": "yourpassword",
+  "wineprefix_snapshot": ""
+}
+EOF
+
+# 4. Run the addon
+docker run --rm -it \
+  -v /tmp/ha-test/data:/data \
+  -v /tmp/ha-test/share:/share \
+  calibre-dedrm-ha
+```
+
+### Test snapshot restore
+
+```bash
+# Create snapshot from the working standalone prefix
+tar -czf /tmp/ha-test/share/calibre-dedrm/wineprefix-snapshot.tar.gz \
+    -C volumes wineprefix/
+
+# Point options at it (credentials not needed)
+cat > /tmp/ha-test/data/options.json <<'EOF'
+{
+  "adobe_email": "",
+  "adobe_password": "",
+  "wineprefix_snapshot": "/share/calibre-dedrm/wineprefix-snapshot.tar.gz"
+}
+EOF
+
+# Wipe any previous data dir so the restore is triggered
+rm -rf /tmp/ha-test/data/wineprefix
+
+docker run --rm -it \
+  -v /tmp/ha-test/data:/data \
+  -v /tmp/ha-test/share:/share \
+  calibre-dedrm-ha
+```
+
+### Test ACSM processing (once the addon is running)
+
+```bash
+# Drop an ACSM file into the input folder while the container is running
+cp your-book.acsm /tmp/ha-test/share/calibre-dedrm/input/
+
+# The addon polls every 30 s — decrypted epub will appear in:
+ls /tmp/ha-test/share/calibre-dedrm/books/
+```
+
+### Paths differ from the standalone setup
+
+| | Standalone | HA addon |
+| --- | --- | --- |
+| Wine prefix | `./volumes/wineprefix` | `/data/wineprefix` |
+| Calibre config | `./volumes/calibre-config` | `/data/calibre-config` |
+| ADE books dir | `./volumes/ade-books` | `/data/wineprefix/drive_c/users/root/Documents/My Digital Editions` |
+| Output | `./volumes/books` | `/share/calibre-dedrm/books` |
+| Input ACSM | `./volumes/ade-books-input` | `/share/calibre-dedrm/input` |
+| Credentials | `.env` file | HA addon Configuration tab |
+
+Wine runs as root in the HA addon, so user-specific paths inside the prefix use `root` instead of `calibre` (e.g. `drive_c/users/root/AppData/...`).
+
 ## Reference
 
 - [noDRM DeDRM_tools](https://github.com/noDRM/DeDRM_tools)

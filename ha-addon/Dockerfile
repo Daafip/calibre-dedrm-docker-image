@@ -21,10 +21,11 @@ RUN dpkg --add-architecture i386 \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /resources
+
 # Download DeDRM 10.0.3 + Obok from the noDRM GitHub release.
 # These are open source (GPLv3) and freely redistributable.
-# RUN mkdir -p /resources \
-#     && wget -q -O /tmp/dedrm.zip \
+# RUN wget -q -O /tmp/dedrm.zip \
 #        "https://github.com/noDRM/DeDRM_tools/releases/download/v10.0.3/DeDRM_tools_10.0.3.zip" \
 #     && unzip -q /tmp/dedrm.zip "DeDRM_Plugin.zip" "Obok_plugin.zip" -d /resources/ \
 #     && rm /tmp/dedrm.zip \
