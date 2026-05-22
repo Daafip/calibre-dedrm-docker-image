@@ -4,6 +4,9 @@ set -euo pipefail
 # Prefix every line of output with a timestamp
 exec > >(while IFS= read -r _line; do printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$_line"; done) 2>&1
 
+# Print build timestamp so the user can confirm which image HA is running
+[ -f /build-info.txt ] && echo ">>> Addon version: $(cat /build-info.txt)"
+
 # ── Home Assistant addon options ─────────────────────────────────────────────
 OPTIONS=/data/options.json
 ADOBE_EMAIL=$(jq --raw-output '.adobe_email // empty' "$OPTIONS" 2>/dev/null || true)
@@ -63,15 +66,8 @@ if [ ! -f "$WINETRICKS_DONE" ]; then
         esac
         chown -R root:root "$WINEPREFIX"
         echo ">>> Snapshot restored."
-    elif [ -d "/wineprefix-base" ]; then
-        echo ">>> Copying pre-built wineprefix from image (first run, may take a few minutes)..."
-        cp -a /wineprefix-base/. "$WINEPREFIX/"
-        chown -R root:root "$WINEPREFIX"
-        echo ">>> Wineprefix copied — updating Wine registration..."
-        WINEDEBUG=-all wineboot --update 2>/dev/null || true
-        echo ">>> Wineprefix ready."
     else
-        echo ">>> No pre-built prefix found — building from scratch (this takes 10–20 min)..."
+        echo ">>> First run — building Wine prefix (this takes 10–20 min)..."
         wineboot --init
         winetricks -q dotnet48 corefonts tahoma
         winetricks -q win10
@@ -82,8 +78,8 @@ fi
 # ── Phase 3: Python 3.12 (32-bit) + pycryptodome ─────────────────────────────
 if [ ! -f "$PYTHON_EXE" ]; then
     # Look in /resources (bundled at build time), then /share/calibre-dedrm/resources
-    PY_INSTALLER=$(ls /resources/python-3.12*.exe "$RESOURCES_DIR"/python-3.12*.exe 2>/dev/null \
-        | grep -v amd64 | head -1 || true)
+    PY_INSTALLER=$(find /resources "$RESOURCES_DIR" -maxdepth 1 \
+        -name "python-3.12*.exe" ! -name "*amd64*" -size +1c 2>/dev/null | head -1 || true)
     if [ -z "$PY_INSTALLER" ]; then
         echo "ERROR: Python 3.12 (32-bit) installer not found."
         echo "       Place python-3.12.x.exe (not -amd64) in $RESOURCES_DIR."
@@ -179,7 +175,8 @@ ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.0/Digi
 [ ! -f "$ADE_EXE" ] && ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.5/DigitalEditions.exe"
 
 if [ ! -f "$ADE_EXE" ]; then
-    ADE_INSTALLER=$(ls /resources/ADE_4*.exe "$RESOURCES_DIR"/ADE_4*.exe 2>/dev/null | head -1 || true)
+    ADE_INSTALLER=$(find /resources "$RESOURCES_DIR" -maxdepth 1 \
+        -name "ADE_4*.exe" -size +1c 2>/dev/null | head -1 || true)
     if [ -z "$ADE_INSTALLER" ]; then
         echo "ERROR: No ADE installer found."
         echo "       It should have been downloaded at image build time."

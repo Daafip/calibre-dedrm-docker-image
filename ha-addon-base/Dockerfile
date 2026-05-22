@@ -46,24 +46,3 @@ RUN mkdir -p /usr/share/wine/gecko \
     || echo "WARNING: Gecko pre-fetch failed."
 
 ENV WINEARCH=win32
-
-# Build the Wine prefix with .NET 4.8, Python 3.12, and ADE already installed.
-# This is the slow step (~20 min). The result lives at /wineprefix-base and is
-# copied to /data/wineprefix on the addon's first start (seconds, not minutes).
-RUN /bin/bash -c '\
-    export WINEPREFIX=/wineprefix-base WINEARCH=win32 HOME=/root; \
-    Xvfb :99 -screen 0 1024x768x24 -nolisten tcp & XVFB_PID=$!; \
-    export DISPLAY=:99; \
-    sleep 2; \
-    WINEDEBUG=-all wine reg add "HKCU\\SOFTWARE\\Microsoft\\Avalon.Graphics" \
-        /v DisableHWAcceleration /t REG_DWORD /d 1 /f 2>/dev/null || true; \
-    WINEDEBUG=-all wineboot --init 2>/dev/null || true; \
-    winetricks -q dotnet48 corefonts tahoma || { echo "ERROR: winetricks dotnet48 failed"; exit 1; }; \
-    winetricks -q win10 || true; \
-    WINEDEBUG=-all wine /resources/python-3.12.7.exe /quiet PrependPath=1 Include_doc=0 2>/dev/null \
-        || echo "WARNING: Python installer exited non-zero — will install at addon start if needed."; \
-    PYEXE="/wineprefix-base/drive_c/users/root/AppData/Local/Programs/Python/Python312-32/python.exe"; \
-    [ -f "$PYEXE" ] && WINEDEBUG=-all wine "$PYEXE" -m pip install --quiet pycryptodome 2>/dev/null \
-        || echo "WARNING: pycryptodome install skipped or failed."; \
-    touch /wineprefix-base/.winetricks_done; \
-    kill $XVFB_PID 2>/dev/null || true'

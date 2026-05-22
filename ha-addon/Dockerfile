@@ -5,4 +5,7 @@ COPY run.sh /run.sh
 COPY upload_server.py /upload_server.py
 RUN chmod +x /run.sh
 
+ARG BUILD_VERSION=dev
+RUN echo "$BUILD_VERSION" > /build-info.txt
+
 ENTRYPOINT ["/run.sh"]
