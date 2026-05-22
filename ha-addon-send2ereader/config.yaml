@@ -5,7 +5,7 @@ version: "1.4.0"
 slug: "send2ereader"
 init: false
 arch:
-- amd64s
+- amd64
 - aarch64
 - armv7
 
