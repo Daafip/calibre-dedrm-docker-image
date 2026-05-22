@@ -4,14 +4,12 @@ set -euo pipefail
 # Prefix every line of output with a timestamp
 exec > >(while IFS= read -r _line; do printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$_line"; done) 2>&1
 
-# Print build timestamp so the user can confirm which image HA is running
 [ -f /build-info.txt ] && echo ">>> Addon version: $(cat /build-info.txt)"
 
 # ── Home Assistant addon options ─────────────────────────────────────────────
 OPTIONS=/data/options.json
 ADOBE_EMAIL=$(jq --raw-output '.adobe_email // empty' "$OPTIONS" 2>/dev/null || true)
 ADOBE_PASSWORD=$(jq --raw-output '.adobe_password // empty' "$OPTIONS" 2>/dev/null || true)
-WINEPREFIX_SNAPSHOT=$(jq --raw-output '.wineprefix_snapshot // empty' "$OPTIONS" 2>/dev/null || true)
 SEND2EREADER_URL=$(jq --raw-output '.send2ereader_url // empty' "$OPTIONS" 2>/dev/null || true)
 NOTIFY_SERVICE=$(jq --raw-output '.notify_service // empty' "$OPTIONS" 2>/dev/null || true)
 
@@ -19,210 +17,49 @@ INPUT_DIR="/share/calibre-dedrm/input"
 OUTPUT_DIR="/share/calibre-dedrm/books"
 RESOURCES_DIR="/share/calibre-dedrm/resources"
 
-# ── Environment ──────────────────────────────────────────────────────────────
-export WINEARCH=win32
-export WINEPREFIX=/data/wineprefix
 export CALIBRE_CONFIG_DIRECTORY=/data/calibre-config
 export HOME=/root
 
-# Running as root under Wine: user-specific paths use "root" not "calibre"
-PYTHON_EXE="$WINEPREFIX/drive_c/users/root/AppData/Local/Programs/Python/Python312-32/python.exe"
-PY_DIR="C:\\users\\root\\AppData\\Local\\Programs\\Python\\Python312-32"
-ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.0/DigitalEditions.exe"
-[ ! -f "$ADE_EXE" ] && ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.5/DigitalEditions.exe"
-ADE_BOOKS_DIR="$WINEPREFIX/drive_c/users/root/Documents/My Digital Editions"
 DEDRM_MARKER="$CALIBRE_CONFIG_DIRECTORY/plugins/dedrm.json"
-WINETRICKS_DONE="$WINEPREFIX/.winetricks_done"
+ADEPT_DIR=/data/adept
 
 # ── Directories ──────────────────────────────────────────────────────────────
 mkdir -p "$INPUT_DIR" "$OUTPUT_DIR" "$RESOURCES_DIR"
-mkdir -p "$ADE_BOOKS_DIR" "$ADE_BOOKS_DIR/Manifest" "$ADE_BOOKS_DIR/Tags"
-mkdir -p /root/.cache/mesa_shader_cache 2>/dev/null || true
+mkdir -p "$ADEPT_DIR"
 
-# ── Xvfb (always headless in HA) ─────────────────────────────────────────────
-Xvfb :99 -screen 0 1024x768x24 -nolisten tcp 2>/dev/null &
-XVFB_PID=$!
-export DISPLAY=:99
-trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
-sleep 2  # give Xvfb time to be ready before any Wine call
-
-# ── First-run: populate /data/wineprefix ─────────────────────────────────────
-# Priority: user snapshot > build from scratch
-# IMPORTANT: wineboot --init must run before any other wine call so the prefix
-# is cleanly initialised before winetricks touches it.
-if [ ! -f "$WINETRICKS_DONE" ]; then
-    if [ -n "${WINEPREFIX_SNAPSHOT:-}" ]; then
-        echo ">>> Restoring wineprefix from snapshot: $(basename "$WINEPREFIX_SNAPSHOT")"
-        case "$WINEPREFIX_SNAPSHOT" in
-            http://*|https://*)
-                wget -q --show-progress -O /tmp/snapshot.tar.gz "$WINEPREFIX_SNAPSHOT"
-                tar --no-same-owner -xzf /tmp/snapshot.tar.gz -C "$(dirname "$WINEPREFIX")"
-                rm -f /tmp/snapshot.tar.gz
-                ;;
-            *)
-                tar --no-same-owner -xzf "$WINEPREFIX_SNAPSHOT" -C "$(dirname "$WINEPREFIX")"
-                ;;
-        esac
-        chown -R root:root "$WINEPREFIX"
-        echo ">>> Snapshot restored."
-    else
-        echo ">>> First run — building Wine prefix (this takes 10–20 min)..."
-        wineboot --init
-        winetricks -q dotnet48 corefonts tahoma
-        winetricks -q win10
-        touch "$WINETRICKS_DONE"
-    fi
+# Persist libgourou activation data across container restarts
+mkdir -p /root/.config
+if [ ! -L /root/.config/adept ] || [ "$(readlink /root/.config/adept)" != "$ADEPT_DIR" ]; then
+    rm -rf /root/.config/adept
+    ln -sf "$ADEPT_DIR" /root/.config/adept
 fi
 
-# Disable WPF hardware compositing — runs after prefix exists so it doesn't
-# trigger Wine's auto-init before wineboot has had a chance to run cleanly.
-wine reg add "HKCU\\SOFTWARE\\Microsoft\\Avalon.Graphics" \
-    /v DisableHWAcceleration /t REG_DWORD /d 1 /f 2>/dev/null || true
+# ── libgourou: device activation ─────────────────────────────────────────────
+ADEPT_ACTIVATION="$ADEPT_DIR/activation.xml"
 
-# Force native .NET (dotnet48) over Wine Mono for WPF apps like ADE.
-# winetricks sets this in the registry but the env var takes effect immediately.
-wine reg add "HKCU\\Software\\Wine\\DllOverrides" \
-    /v mscoree /t REG_SZ /d "native,builtin" /f 2>/dev/null || true
-
-# ── Phase 3: Python 3.12 (32-bit) + pycryptodome ─────────────────────────────
-if [ ! -f "$PYTHON_EXE" ]; then
-    # Look in /resources (bundled at build time), then /share/calibre-dedrm/resources
-    PY_INSTALLER=$(find /resources "$RESOURCES_DIR" -maxdepth 1 \
-        -name "python-3.12*.exe" ! -name "*amd64*" -size +1c 2>/dev/null | head -1 || true)
-    if [ -z "$PY_INSTALLER" ]; then
-        echo "ERROR: Python 3.12 (32-bit) installer not found."
-        echo "       Place python-3.12.x.exe (not -amd64) in $RESOURCES_DIR."
-        exit 1
-    fi
-    echo ">>> Installing Python 3.12 (32-bit)..."
-    cp "$PY_INSTALLER" /tmp/python-installer.exe
-    wine /tmp/python-installer.exe /quiet PrependPath=1 Include_doc=0
-    rm -f /tmp/python-installer.exe
-    echo ">>> Installing pycryptodome..."
-    wine "$PYTHON_EXE" -m pip install --quiet pycryptodome
-fi
-
-# Ensure python.exe is on the Wine PATH (run every startup)
-wine reg add "HKCU\\Environment" /v Path /t REG_SZ \
-    /d "${PY_DIR};${PY_DIR}\\Scripts" /f 2>/dev/null || true
-wine reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment" \
-    /v Path /t REG_EXPAND_SZ \
-    /d "%SystemRoot%\\system32;%SystemRoot%;${PY_DIR};${PY_DIR}\\Scripts" /f 2>/dev/null || true
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-ade_is_authorized() {
-    grep -q 'Adept\\\\Activation' "$WINEPREFIX/user.reg" 2>/dev/null
-}
-
-ade_headless_auth() {
-    local EMAIL="$1" PASSWORD="$2"
-    echo ">>> Starting ADE for headless authorization under Xvfb..."
-    WINEDLLOVERRIDES="mscoree=n,b" WINEDEBUG=-all wine "$ADE_EXE" &
-    local ADE_AUTH_PID=$! ADE_WID="" i=0
-    while [ $i -lt 60 ]; do
-        sleep 1
-        # Check the process is still alive
-        if ! kill -0 "$ADE_AUTH_PID" 2>/dev/null; then
-            echo ">>> WARNING: ADE process exited early (crashed or already running)"
-            return 1
-        fi
-        ADE_WID=$(xdotool search --name "Adobe Digital Editions" 2>/dev/null | tail -1)
-        [ -n "$ADE_WID" ] && break
-        i=$((i+1))
-    done
-    if [ -z "$ADE_WID" ]; then
-        echo ">>> WARNING: ADE window did not appear after 60 s — headless auth skipped"
-        echo "    Window titles visible to xdotool:"
-        xdotool search --name '' 2>/dev/null \
-            | xargs -I{} xdotool getwindowname {} 2>/dev/null \
-            | grep -v '^$' | sort -u \
-            | sed 's/^/      /' || true
-        kill "$ADE_AUTH_PID" 2>/dev/null || true
-        return 1
-    fi
-    echo ">>> ADE window ready, navigating to Authorize Computer..."
-    sleep 2
-    xdotool windowfocus --sync "$ADE_WID" || true
-    xdotool windowraise "$ADE_WID" || true
-    sleep 0.5
-    xdotool key "alt+h" || true
-    sleep 0.8
-    xdotool key "a" || true
-    sleep 2
-    xdotool key "Tab" || true
-    sleep 0.3
-    xdotool type --clearmodifiers --delay 30 "$EMAIL" || true
-    xdotool key "Tab" || true
-    sleep 0.3
-    xdotool type --clearmodifiers --delay 30 "$PASSWORD" || true
-    xdotool key "Tab" || true
-    sleep 0.3
-    xdotool key "Return" || true
-    echo ">>> Credentials submitted, waiting up to 60 s for Adobe servers..."
-    local j=0
-    while [ $j -lt 12 ]; do
-        sleep 5
-        ade_is_authorized && break || true
-        j=$((j+1))
-    done
-    kill "$ADE_AUTH_PID" 2>/dev/null || true
-    pkill -f "DigitalEditions" 2>/dev/null || true
-    sleep 2
-    if ade_is_authorized; then
-        echo ">>> ADE authorization succeeded."
-    else
-        echo ">>> WARNING: Headless auth did not complete — check credentials."
-        echo "    Alternative: place a wineprefix snapshot tarball in $RESOURCES_DIR"
-        echo "    and set wineprefix_snapshot in the addon configuration."
-    fi
-}
-
-# ── Phase 4: ADE install + authorization ─────────────────────────────────────
-# Re-resolve after any snapshot restore
-ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.0/DigitalEditions.exe"
-[ ! -f "$ADE_EXE" ] && ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.5/DigitalEditions.exe"
-
-if [ ! -f "$ADE_EXE" ]; then
-    ADE_INSTALLER=$(find /resources "$RESOURCES_DIR" -maxdepth 1 \
-        -name "ADE_4*.exe" -size +1c 2>/dev/null | head -1 || true)
-    if [ -z "$ADE_INSTALLER" ]; then
-        echo "ERROR: No ADE installer found."
-        echo "       It should have been downloaded at image build time."
-        echo "       As a fallback, place ADE_4.0.3_Installer.exe in: $RESOURCES_DIR"
-        exit 1
-    fi
-    echo ">>> Installing Adobe Digital Editions (silent)..."
-    cp "$ADE_INSTALLER" /tmp/ADE_installer.exe
-    WINEDLLOVERRIDES="mscoree=n,b" WINEDEBUG=-all wine /tmp/ADE_installer.exe /S 2>/dev/null
-    rm -f /tmp/ADE_installer.exe
-    sleep 30
-    ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.0/DigitalEditions.exe"
-    [ ! -f "$ADE_EXE" ] && ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.5/DigitalEditions.exe"
-fi
-
-if ! ade_is_authorized; then
+if [ ! -f "$ADEPT_ACTIVATION" ]; then
     if [ -n "${ADOBE_EMAIL:-}" ] && [ -n "${ADOBE_PASSWORD:-}" ]; then
-        ade_headless_auth "$ADOBE_EMAIL" "$ADOBE_PASSWORD" || true
+        echo ">>> Activating device with Adobe ID: $ADOBE_EMAIL"
+        if echo "y" | adept_activate -u "$ADOBE_EMAIL" -p "$ADOBE_PASSWORD"; then
+            echo ">>> Activation succeeded."
+        else
+            echo ">>> WARNING: Activation failed — check credentials."
+            echo "    ACSM processing will fail until the device is activated."
+        fi
     else
-        echo ">>> WARNING: ADE is not authorized. Set adobe_email + adobe_password in the addon"
-        echo "    configuration, or place a wineprefix snapshot at:"
-        echo "    $RESOURCES_DIR/wineprefix-authorized.tar.gz"
-        echo "    and set wineprefix_snapshot in the addon configuration."
-        echo "    ACSM files will fail to download until ADE is authorized."
+        echo ">>> WARNING: Device not activated and no credentials configured."
+        echo "    Set adobe_email + adobe_password in the addon configuration."
+        echo "    ACSM files will fail until the device is activated."
     fi
 else
-    echo ">>> ADE is already authorized."
+    echo ">>> Device already activated."
 fi
 
-# ── Phase 5: Calibre + DeDRM plugin ──────────────────────────────────────────
+# ── Calibre + DeDRM plugin ────────────────────────────────────────────────────
 mkdir -p "$CALIBRE_CONFIG_DIRECTORY/calibre"
 
 find_plugin() {
     local name="$1"
-    # Prefer build-time bundle in /resources/, fall back to user-supplied share dir,
-    # then download from noDRM GitHub releases.
-    # All diagnostic output goes to stderr so $() captures only the path.
     local found
     found=$(ls "/resources/$name" "$RESOURCES_DIR/$name" 2>/dev/null \
         | while IFS= read -r f; do [ -s "$f" ] && echo "$f"; done \
@@ -254,133 +91,35 @@ if [ ! -f "$DEDRM_MARKER" ]; then
     cat > "$DEDRM_MARKER" <<JSON
 {
   "adeptkeys": {},
-  "adobe_pdf_passphrases": [],
-  "androidkeys": {},
-  "adobewineprefix": "${WINEPREFIX}",
-  "bandnkeys": {},
   "configured": true,
-  "ereaderkeys": {},
   "kindlekeys": {},
-  "kindlewineprefix": "",
-  "lcp_passphrases": [],
   "pids": [],
   "serials": []
 }
 JSON
 fi
 
-# Patch DeDRM wineutils.py: replace C:\Python27 name lookup with the full path,
-# forcing Wine to use CreateProcess (which works) instead of ShellExecute (which fails
-# for console apps when called by name).
-calibre-debug -e /dev/stdin <<'PYEOF'
-import zipfile, os, sys
-config = os.environ.get('CALIBRE_CONFIG_DIRECTORY', '/data/calibre-config')
-zip_path = config + '/plugins/DeDRM.zip'
-marker = '# patched-by-docker-image'
-try:
-    with zipfile.ZipFile(zip_path, 'r') as zf:
-        content = zf.read('wineutils.py').decode('utf-8')
-except Exception as e:
-    print(f'DeDRM.zip not found: {e}'); sys.exit(0)
-if marker in content:
-    sys.exit(0)
-old = '            ["wine", "C:\\\\Python27\\\\python.exe"], # Should likely be removed'
-new = ('            ["wine", "C:\\\\users\\\\root\\\\AppData\\\\Local\\\\Programs'
-       '\\\\Python\\\\Python312-32\\\\python.exe"], ' + marker + '\n' + old)
-if old not in content:
-    print('WARNING: DeDRM wineutils.py patch target not found — plugin updated?'); sys.exit(0)
-patched = content.replace(old, new)
-tmp = zip_path + '.tmp'
-try:
-    with zipfile.ZipFile(zip_path, 'r') as zin, \
-         zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename == 'wineutils.py':
-                data = patched.encode('utf-8')
-            zout.writestr(item, data)
-    os.replace(tmp, zip_path)
-    print('>>> Patched DeDRM: full Python path added to WinePythonCLI candidates.')
-except Exception as e:
-    if os.path.exists(tmp): os.remove(tmp)
-    print(f'>>> WARNING: DeDRM patch failed: {e}')
-PYEOF
-
-# Pre-extract ADEPT key so DeDRM can decrypt without needing the Wine Python lookup
-ADOBEKEY_SCRIPT="$CALIBRE_CONFIG_DIRECTORY/plugins/DeDRM/libraryfiles/adobekey.py"
-ADEPT_KEY_COUNT=$(python3 -c "
-import json, sys
-try:
-    d = json.load(open('$DEDRM_MARKER'))
-    print(len(d.get('adeptkeys', {})))
-except Exception: print(0)
-" 2>/dev/null || echo 0)
-
-if [ "$ADEPT_KEY_COUNT" = "0" ] && [ -f "$PYTHON_EXE" ] && [ -f "$ADOBEKEY_SCRIPT" ]; then
-    echo ">>> Extracting ADEPT key from Wine prefix..."
-    KEYDIR=$(mktemp -d)
-    KEYDIR_WIN=$(winepath -w "$KEYDIR" 2>/dev/null || echo "Z:${KEYDIR}")
-    WINEDEBUG=-all wine "$PYTHON_EXE" "$ADOBEKEY_SCRIPT" "$KEYDIR_WIN" || true
-    KEY_FILE=$(ls "$KEYDIR"/*.der 2>/dev/null | head -1 || true)
-    if [ -n "${KEY_FILE:-}" ]; then
-        export KEY_FILE DEDRM_MARKER KEY_NAME
-        KEY_NAME=$(basename "$KEY_FILE" .der)
-        python3 -c "
-import json, os
-key_file = os.environ['KEY_FILE']
-key_name = os.environ['KEY_NAME']
-marker   = os.environ['DEDRM_MARKER']
-with open(key_file, 'rb') as f: key_hex = f.read().hex()
-with open(marker) as f: d = json.load(f)
-d.setdefault('adeptkeys', {})[key_name] = key_hex
-with open(marker, 'w') as f: json.dump(d, f, indent=2)
-print('>>> ADEPT key cached — DeDRM will use it directly.')
-"
-    else
-        echo ">>> No ADEPT key found — ADE may not be authorized yet."
-    fi
-    rm -rf "$KEYDIR"
-fi
-
 # ── send2ereader helpers ──────────────────────────────────────────────────────
 
-# Upload an epub to send2ereader.
-# Flow: POST /generate → get server-registered code, POST /upload → store file,
-# GET /status/:code → retrieve download URL.
-# Returns the download URL on success, empty string on failure.
 push_to_send2ereader() {
     local epub="$1" base_url="${2%/}"
-    local COOKIEJAR
+    local COOKIEJAR CODE STATUS DOWNLOAD_URL
     COOKIEJAR=$(mktemp)
-
-    # Step 1: register a code — server ties the key to this cookie session
-    local CODE
     CODE=$(curl -sf -c "$COOKIEJAR" -X POST "$base_url/generate" 2>/dev/null || true)
     if [ -z "$CODE" ]; then
-        rm -f "$COOKIEJAR"; echo "" ; return
+        rm -f "$COOKIEJAR"; echo ""; return
     fi
-
-    # Step 2: upload — must present the same cookie or the key is expired immediately
-    local STATUS
     STATUS=$(curl -sf -b "$COOKIEJAR" -o /dev/null -w "%{http_code}" \
-        -F "key=$CODE" \
-        -F "file=@$epub;type=application/epub+zip" \
+        -F "key=$CODE" -F "file=@$epub;type=application/epub+zip" \
         "$base_url/upload" 2>/dev/null || echo "000")
     rm -f "$COOKIEJAR"
-    if [ "$STATUS" != "200" ]; then
-        echo "" ; return
-    fi
-
-    # Step 3: get the download URL from the status endpoint
-    local DOWNLOAD_URL
+    [ "$STATUS" != "200" ] && echo "" && return
     DOWNLOAD_URL=$(curl -sf "$base_url/status/$CODE" 2>/dev/null \
         | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('urls',[''])[0])" \
         2>/dev/null || true)
     echo "${DOWNLOAD_URL:-$base_url/$CODE}"
 }
 
-# Send an HA notification via the Supervisor REST API (no user token needed —
-# the Supervisor injects $SUPERVISOR_TOKEN automatically for every addon).
 notify_ha() {
     local title="$1" message="$2" service="${3:-}"
     [ -z "$service" ] && return 0
@@ -407,76 +146,65 @@ process_acsm() {
     BASENAME=$(basename "$ACSM_FILE")
     echo ">>> Processing: $BASENAME"
 
-    local ACSM_WIN MARKER NEW_FILE ADE_PID
-    ACSM_WIN=$(winepath -w "$(realpath "$ACSM_FILE")")
-    MARKER=$(mktemp)
+    # Step 1: Download the DRM-protected ePub/PDF from Adobe's fulfillment servers
+    local DOWNLOAD_DIR
+    DOWNLOAD_DIR=$(mktemp -d)
 
-    WINEDLLOVERRIDES="mscoree=n,b" WINEDEBUG=-all wine "$ADE_EXE" "$ACSM_WIN" >/dev/null 2>&1 &
-    ADE_PID=$!
-
-    NEW_FILE=""
-    for i in $(seq 1 60); do
-        sleep 5
-        local CANDIDATE
-        CANDIDATE=$(find "$ADE_BOOKS_DIR" \( -name "*.epub" -o -name "*.pdf" \) -newer "$MARKER" \
-            2>/dev/null | head -1 || true)
-        if [ -n "${CANDIDATE:-}" ]; then
-            local SIZE1 SIZE2
-            SIZE1=$(stat -c%s "$CANDIDATE" 2>/dev/null || echo 0)
-            sleep 3
-            SIZE2=$(stat -c%s "$CANDIDATE" 2>/dev/null || echo 0)
-            if [ "$SIZE1" = "$SIZE2" ] && [ "$SIZE1" -gt 1000 ]; then
-                NEW_FILE="$CANDIDATE"
-                echo ">>> Download complete: $(basename "$NEW_FILE")"
-                break
-            fi
-        fi
-        kill -0 "$ADE_PID" 2>/dev/null || break
-    done
-
-    rm -f "$MARKER"
-    kill "$ADE_PID" 2>/dev/null || true
-    pkill -f "DigitalEditions" 2>/dev/null || true
-
-    # Fallback: most-recently-modified file (covers cases where ADE exited early)
-    if [ -z "${NEW_FILE:-}" ]; then
-        NEW_FILE=$(find "$ADE_BOOKS_DIR" \( -name "*.epub" -o -name "*.pdf" \) 2>/dev/null \
-            | xargs ls -t 2>/dev/null | head -1 || true)
-        [ -n "${NEW_FILE:-}" ] && echo ">>> Using most recent file: $(basename "$NEW_FILE")"
+    if ! (cd "$DOWNLOAD_DIR" && acsmdownloader -f "$(realpath "$ACSM_FILE")"); then
+        echo ">>> ERROR: Download failed for $BASENAME."
+        echo "    Is the device activated? Can it reach Adobe's fulfillment servers?"
+        mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        rm -rf "$DOWNLOAD_DIR"
+        return
     fi
 
-    if [ -n "${NEW_FILE:-}" ]; then
-        local TMPLIB EXPORT_MARKER
-        TMPLIB=$(mktemp -d)
-        EXPORT_MARKER=$(mktemp)
-        calibredb add "$NEW_FILE" --with-library "$TMPLIB"
-        calibredb export --all --to-dir "$OUTPUT_DIR" --single-dir --with-library "$TMPLIB"
-        # Find the newly written epub so we can push it to send2ereader
-        local EXPORTED_EPUB
-        EXPORTED_EPUB=$(find "$OUTPUT_DIR" -name "*.epub" -newer "$EXPORT_MARKER" 2>/dev/null | head -1 || true)
-        rm -f "$EXPORT_MARKER"
-        rm -rf "$TMPLIB"
-        rm -f "$ACSM_FILE"
-        echo ">>> Done: $BASENAME → $OUTPUT_DIR"
-
-        # Push to send2ereader if configured
-        if [ -n "${SEND2EREADER_URL:-}" ] && [ -n "${EXPORTED_EPUB:-}" ]; then
-            echo ">>> Uploading to send2ereader..."
-            local DOWNLOAD_URL
-            DOWNLOAD_URL=$(push_to_send2ereader "$EXPORTED_EPUB" "$SEND2EREADER_URL")
-            if [ -n "$DOWNLOAD_URL" ]; then
-                echo "┌──────────────────────────────────────────┐"
-                echo "│  Book ready on Kobo                      │"
-                echo "│  URL  : $DOWNLOAD_URL"
-                echo "└──────────────────────────────────────────┘"
-                notify_ha "Book ready" "$DOWNLOAD_URL" "${NOTIFY_SERVICE:-}"
-            else
-                echo ">>> WARNING: send2ereader upload failed (is it running at $SEND2EREADER_URL?)"
-            fi
-        fi
-    else
-        echo ">>> ERROR: Download failed for $BASENAME. Is ADE authorized? Can it reach Adobe's servers?"
+    local ENCRYPTED_FILE
+    ENCRYPTED_FILE=$(find "$DOWNLOAD_DIR" \( -name "*.epub" -o -name "*.pdf" \) | head -1 || true)
+    if [ -z "${ENCRYPTED_FILE:-}" ]; then
+        echo ">>> ERROR: acsmdownloader produced no output file for $BASENAME."
         mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        rm -rf "$DOWNLOAD_DIR"
+        return
+    fi
+
+    # Step 2: Remove ADEPT DRM
+    local EXT="${ENCRYPTED_FILE##*.}"
+    local DRM_FREE_FILE="${ENCRYPTED_FILE%.*}_drm_free.$EXT"
+    if ! adept_remove -f "$ENCRYPTED_FILE" -o "$DRM_FREE_FILE"; then
+        echo ">>> ERROR: DRM removal failed for $(basename "$ENCRYPTED_FILE")."
+        mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        rm -rf "$DOWNLOAD_DIR"
+        return
+    fi
+
+    # Step 3: Import into Calibre and export to output directory
+    local TMPLIB EXPORT_MARKER EXPORTED_EPUB
+    TMPLIB=$(mktemp -d)
+    EXPORT_MARKER=$(mktemp)
+
+    calibredb add "$DRM_FREE_FILE" --with-library "$TMPLIB"
+    calibredb export --all --to-dir "$OUTPUT_DIR" --single-dir --with-library "$TMPLIB"
+
+    EXPORTED_EPUB=$(find "$OUTPUT_DIR" -name "*.epub" -newer "$EXPORT_MARKER" 2>/dev/null | head -1 || true)
+
+    rm -f "$EXPORT_MARKER"
+    rm -rf "$TMPLIB" "$DOWNLOAD_DIR"
+    rm -f "$ACSM_FILE"
+    echo ">>> Done: $BASENAME → $OUTPUT_DIR"
+
+    if [ -n "${SEND2EREADER_URL:-}" ] && [ -n "${EXPORTED_EPUB:-}" ]; then
+        echo ">>> Uploading to send2ereader..."
+        local DOWNLOAD_URL
+        DOWNLOAD_URL=$(push_to_send2ereader "$EXPORTED_EPUB" "$SEND2EREADER_URL")
+        if [ -n "$DOWNLOAD_URL" ]; then
+            echo "┌──────────────────────────────────────────┐"
+            echo "│  Book ready on Kobo                      │"
+            echo "│  URL  : $DOWNLOAD_URL"
+            echo "└──────────────────────────────────────────┘"
+            notify_ha "Book ready" "$DOWNLOAD_URL" "${NOTIFY_SERVICE:-}"
+        else
+            echo ">>> WARNING: send2ereader upload failed (is it running at $SEND2EREADER_URL?)"
+        fi
     fi
 }
 

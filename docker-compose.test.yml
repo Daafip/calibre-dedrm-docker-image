@@ -1,0 +1,27 @@
+services:
+  base:
+    build:
+      context: ./ha-addon-base
+    image: calibre-dedrm-base
+    command: ["true"]
+
+  addon:
+    build:
+      context: ./ha-addon
+      args:
+        BUILD_FROM: calibre-dedrm-base
+        BUILD_VERSION: dev-local
+    image: calibre-dedrm-addon
+    volumes:
+      - ./test-data/options.json:/data/options.json:ro
+      - ./test-data/adept:/data/adept
+      - ./test-data/calibre-config:/data/calibre-config
+      - ./test-data/input:/share/calibre-dedrm/input
+      - ./test-data/books:/share/calibre-dedrm/books
+      - ./test-data/resources:/share/calibre-dedrm/resources
+    environment:
+      INGRESS_PORT: "8099"
+    ports:
+      - "8099:8099"
+    stdin_open: true
+    tty: true

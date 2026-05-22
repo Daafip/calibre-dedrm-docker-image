@@ -1,9 +1,9 @@
 name: "Calibre DeDRM"
 description: >
   Watches /share/calibre-dedrm/input for .acsm files and converts them to
-  DRM-free ePubs using Adobe Digital Editions + Calibre DeDRM under Wine.
-  Output lands in /share/calibre-dedrm/books.
-version: "1.1.0"
+  DRM-free ePubs using libgourou (native ADEPT) + Calibre DeDRM.
+  No Wine required. Output lands in /share/calibre-dedrm/books.
+version: "1.3.0"
 slug: "calibre_dedrm"
 init: false
 ingress: true
@@ -17,17 +17,10 @@ map:
   - data:rw
 
 options:
-  # Headless ADE authorization — set both to authorize without a GUI.
-  # Leave empty if using wineprefix_snapshot instead.
+  # Adobe ID credentials for device activation (required on first run).
+  # Activation data is stored in /data/adept/ and persists across restarts.
   adobe_email: ""
   adobe_password: ""
-  # Path inside the container to a wineprefix tarball, or an https:// URL.
-  # If set and /data/wineprefix is empty, the tarball is extracted on first run.
-  # Create the snapshot on an authorized machine with:
-  #   tar -czf wineprefix-authorized.tar.gz -C volumes wineprefix/
-  # Then place it in /share/calibre-dedrm/ and set:
-  #   wineprefix_snapshot: /share/calibre-dedrm/wineprefix-authorized.tar.gz
-  wineprefix_snapshot: ""
   # After decryption, automatically push the ePub to send2ereader and show
   # the short code in the addon logs. Set to the send2ereader addon's URL,
   # e.g. http://homeassistant.local:3001 or http://<HA-IP>:3001
@@ -40,6 +33,5 @@ options:
 schema:
   adobe_email: email
   adobe_password: password
-  wineprefix_snapshot: str
   send2ereader_url: str
   notify_service: str

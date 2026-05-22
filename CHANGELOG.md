@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0] - 2026-05-22
+
+### Changed
+- Replaced Wine + Adobe Digital Editions + dotnet48 with libgourou (native Linux ADEPT implementation)
+- No Wine, no Xvfb, no 20-minute first-run winetricks setup
+- Device activation via `adept_activate`; activation data persists in `/data/adept/`
+- ACSM download via `acsmdownloader`; DRM removal via `adept_remove`
+
+### Removed
+- `wineprefix_snapshot` addon option (no longer needed)
+- Wine, winetricks, Xvfb, xdotool, xdotool-based headless auth from base image
+
 ## [1.1.0] - 2026-05-22
 
 ### Added

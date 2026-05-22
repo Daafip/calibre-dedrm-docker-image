@@ -1,3 +1,8 @@
 volumes/
 resources/*.exe
 .env
+test-data/adept/
+test-data/calibre-config/
+test-data/books/
+test-data/options.json
+test-data/resources/
