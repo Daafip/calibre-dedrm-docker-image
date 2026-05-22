@@ -65,8 +65,5 @@ RUN /bin/bash -c '\
     PYEXE="/wineprefix-base/drive_c/users/root/AppData/Local/Programs/Python/Python312-32/python.exe"; \
     [ -f "$PYEXE" ] && WINEDEBUG=-all wine "$PYEXE" -m pip install --quiet pycryptodome 2>/dev/null \
         || echo "WARNING: pycryptodome install skipped or failed."; \
-    WINEDEBUG=-all wine /resources/ADE_4.0.3_Installer.exe /S 2>/dev/null \
-        || echo "WARNING: ADE installer exited non-zero — will install at addon start if needed."; \
-    sleep 10; \
     touch /wineprefix-base/.winetricks_done; \
     kill $XVFB_PID 2>/dev/null || true'

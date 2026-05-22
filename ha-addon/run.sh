@@ -64,9 +64,11 @@ if [ ! -f "$WINETRICKS_DONE" ]; then
         chown -R root:root "$WINEPREFIX"
         echo ">>> Snapshot restored."
     elif [ -d "/wineprefix-base" ]; then
-        echo ">>> Copying pre-built wineprefix from image (first run)..."
+        echo ">>> Copying pre-built wineprefix from image (first run, may take a few minutes)..."
         cp -a /wineprefix-base/. "$WINEPREFIX/"
         chown -R root:root "$WINEPREFIX"
+        echo ">>> Wineprefix copied — updating Wine registration..."
+        WINEDEBUG=-all wineboot --update 2>/dev/null || true
         echo ">>> Wineprefix ready."
     else
         echo ">>> No pre-built prefix found — building from scratch (this takes 10–20 min)..."
@@ -113,14 +115,24 @@ ade_headless_auth() {
     echo ">>> Starting ADE for headless authorization under Xvfb..."
     WINEDEBUG=-all wine "$ADE_EXE" &
     local ADE_AUTH_PID=$! ADE_WID="" i=0
-    while [ $i -lt 30 ]; do
+    while [ $i -lt 60 ]; do
         sleep 1
+        # Check the process is still alive
+        if ! kill -0 "$ADE_AUTH_PID" 2>/dev/null; then
+            echo ">>> WARNING: ADE process exited early (crashed or already running)"
+            return 1
+        fi
         ADE_WID=$(xdotool search --name "Adobe Digital Editions" 2>/dev/null | tail -1)
         [ -n "$ADE_WID" ] && break
         i=$((i+1))
     done
     if [ -z "$ADE_WID" ]; then
-        echo ">>> WARNING: ADE window did not appear — headless auth skipped"
+        echo ">>> WARNING: ADE window did not appear after 60 s — headless auth skipped"
+        echo "    Window titles visible to xdotool:"
+        xdotool search --name '' 2>/dev/null \
+            | xargs -I{} xdotool getwindowname {} 2>/dev/null \
+            | grep -v '^$' | sort -u \
+            | sed 's/^/      /' || true
         kill "$ADE_AUTH_PID" 2>/dev/null || true
         return 1
     fi
