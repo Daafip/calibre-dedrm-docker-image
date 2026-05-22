@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Minimal ACSM upload server — served via HA ingress."""
-import cgi
+import email.parser
 import html
 import http.server
 import os
@@ -48,20 +48,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         ct = self.headers.get("Content-Type", "")
+        length = int(self.headers.get("Content-Length", 0))
         try:
-            form = cgi.FieldStorage(
-                fp=self.rfile,
-                headers=self.headers,
-                environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": ct},
-            )
-            field = form["acsm"]
-            filename = os.path.basename(field.filename or "").strip()
+            body = self.rfile.read(length)
+            msg_bytes = f"Content-Type: {ct}\r\n\r\n".encode() + body
+            msg = email.parser.BytesParser().parsebytes(msg_bytes)
+            field = filename = data = None
+            for part in msg.walk():
+                if part.get_param("name", header="content-disposition") == "acsm":
+                    filename = os.path.basename(part.get_filename() or "").strip()
+                    data = part.get_payload(decode=True)
+                    break
+            if not filename or not data:
+                raise ValueError("No file received.")
             if not filename.lower().endswith(".acsm"):
                 raise ValueError("Only .acsm files are accepted.")
             dest = pathlib.Path(INPUT_DIR) / filename
-            dest.write_bytes(field.file.read())
-            msg = f'<div class="msg ok"><strong>{html.escape(filename)}</strong> queued for processing.</div>'
-            self._html(200, msg)
+            dest.write_bytes(data)
+            msg_html = f'<div class="msg ok"><strong>{html.escape(filename)}</strong> queued for processing.</div>'
+            self._html(200, msg_html)
         except Exception as exc:
             self._html(400, f'<div class="msg err">Error: {html.escape(str(exc))}</div>')
 

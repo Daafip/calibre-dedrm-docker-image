@@ -1,0 +1,37 @@
+<fulfillmentToken fulfillmentType="buy" auth="user" xmlns="http://ns.adobe.com/adept">
+  <distributor>urn:uuid:00000000-0000-0000-0000-000000000001</distributor>
+  <operatorURL>http://digitaldistribution.cb.nl/fulfillment</operatorURL>
+  <transaction>16456594</transaction>
+  <purchase>2026-05-21T23:03:55+02:00</purchase>
+  <expiration>2028-05-20T23:03:55+02:00</expiration>
+  <resourceItemInfo>
+    <resource>urn:uuid:f29d35a0-2289-4e8b-b93b-9e458fd933d5</resource>
+    <resourceItem>0</resourceItem>
+    <metadata>
+      <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">9789044353242_DeBoekbinder</dc:title>
+      <dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/"></dc:creator>
+      <dc:publisher xmlns:dc="http://purl.org/dc/elements/1.1/"></dc:publisher>
+      <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/">urn:uuid:29d919dd-24f5-4384-be78-b447c9dc299b</dc:identifier>
+      <dc:format xmlns:dc="http://purl.org/dc/elements/1.1/">application/epub+zip</dc:format>
+      <dc:language xmlns:dc="http://purl.org/dc/elements/1.1/">nl-NL</dc:language>
+    </metadata>
+    <licenseToken>
+      <resource>urn:uuid:f29d35a0-2289-4e8b-b93b-9e458fd933d5</resource>
+      <permissions>
+        <display>
+          <until>2026-06-11T23:03:55+02:00</until>
+        </display>
+        <excerpt>
+          <until>2026-06-11T23:03:55+02:00</until>
+        </excerpt>
+        <print>
+          <until>2026-06-11T23:03:55+02:00</until>
+        </print>
+        <play>
+          <until>2026-06-11T23:03:55+02:00</until>
+        </play>
+      </permissions>
+    </licenseToken>
+  </resourceItemInfo>
+  <hmac>bhUuWea/Cphi6jQpzwi5U5aDQ78=</hmac>
+</fulfillmentToken>

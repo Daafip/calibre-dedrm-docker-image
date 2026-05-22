@@ -3,7 +3,7 @@ description: >
   Watches /share/calibre-dedrm/input for .acsm files and converts them to
   DRM-free ePubs using libgourou (native ADEPT) + Calibre DeDRM.
   No Wine required. Output lands in /share/calibre-dedrm/books.
-version: "1.3.0"
+version: "1.4.0"
 slug: "calibre_dedrm"
 init: false
 ingress: true

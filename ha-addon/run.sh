@@ -37,7 +37,13 @@ fi
 # ── libgourou: device activation ─────────────────────────────────────────────
 ADEPT_ACTIVATION="$ADEPT_DIR/activation.xml"
 
-if [ ! -f "$ADEPT_ACTIVATION" ]; then
+# A complete activation contains <adept:user>; a partial file (from a failed
+# first run) only has service-info/certificate elements.
+adept_is_complete() {
+    grep -q 'adept:user' "$ADEPT_ACTIVATION" 2>/dev/null
+}
+
+if ! adept_is_complete; then
     if [ -n "${ADOBE_EMAIL:-}" ] && [ -n "${ADOBE_PASSWORD:-}" ]; then
         echo ">>> Activating device with Adobe ID: $ADOBE_EMAIL"
         if echo "y" | adept_activate -u "$ADOBE_EMAIL" -p "$ADOBE_PASSWORD"; then
@@ -52,7 +58,7 @@ if [ ! -f "$ADEPT_ACTIVATION" ]; then
         echo "    ACSM files will fail until the device is activated."
     fi
 else
-    echo ">>> Device already activated."
+    echo ">>> Device already activated (activation.xml OK)."
 fi
 
 # ── Calibre + DeDRM plugin ────────────────────────────────────────────────────
