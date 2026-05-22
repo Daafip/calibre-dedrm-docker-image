@@ -44,13 +44,12 @@ Xvfb :99 -screen 0 1024x768x24 -nolisten tcp 2>/dev/null &
 XVFB_PID=$!
 export DISPLAY=:99
 trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
-
-# Disable WPF hardware compositing (prevents rmsdk_wrapper crash under Wine 9.x)
-wine reg add "HKCU\\SOFTWARE\\Microsoft\\Avalon.Graphics" \
-    /v DisableHWAcceleration /t REG_DWORD /d 1 /f 2>/dev/null || true
+sleep 2  # give Xvfb time to be ready before any Wine call
 
 # ── First-run: populate /data/wineprefix ─────────────────────────────────────
-# Priority: user snapshot > image pre-built prefix > build from scratch (fallback)
+# Priority: user snapshot > build from scratch
+# IMPORTANT: wineboot --init must run before any other wine call so the prefix
+# is cleanly initialised before winetricks touches it.
 if [ ! -f "$WINETRICKS_DONE" ]; then
     if [ -n "${WINEPREFIX_SNAPSHOT:-}" ]; then
         echo ">>> Restoring wineprefix from snapshot: $(basename "$WINEPREFIX_SNAPSHOT")"
@@ -74,6 +73,16 @@ if [ ! -f "$WINETRICKS_DONE" ]; then
         touch "$WINETRICKS_DONE"
     fi
 fi
+
+# Disable WPF hardware compositing — runs after prefix exists so it doesn't
+# trigger Wine's auto-init before wineboot has had a chance to run cleanly.
+wine reg add "HKCU\\SOFTWARE\\Microsoft\\Avalon.Graphics" \
+    /v DisableHWAcceleration /t REG_DWORD /d 1 /f 2>/dev/null || true
+
+# Force native .NET (dotnet48) over Wine Mono for WPF apps like ADE.
+# winetricks sets this in the registry but the env var takes effect immediately.
+wine reg add "HKCU\\Software\\Wine\\DllOverrides" \
+    /v mscoree /t REG_SZ /d "native,builtin" /f 2>/dev/null || true
 
 # ── Phase 3: Python 3.12 (32-bit) + pycryptodome ─────────────────────────────
 if [ ! -f "$PYTHON_EXE" ]; then
@@ -109,7 +118,7 @@ ade_is_authorized() {
 ade_headless_auth() {
     local EMAIL="$1" PASSWORD="$2"
     echo ">>> Starting ADE for headless authorization under Xvfb..."
-    WINEDEBUG=-all wine "$ADE_EXE" &
+    WINEDLLOVERRIDES="mscoree=n,b" WINEDEBUG=-all wine "$ADE_EXE" &
     local ADE_AUTH_PID=$! ADE_WID="" i=0
     while [ $i -lt 60 ]; do
         sleep 1
@@ -185,9 +194,9 @@ if [ ! -f "$ADE_EXE" ]; then
     fi
     echo ">>> Installing Adobe Digital Editions (silent)..."
     cp "$ADE_INSTALLER" /tmp/ADE_installer.exe
-    WINEDEBUG=-all wine /tmp/ADE_installer.exe /S 2>/dev/null
+    WINEDLLOVERRIDES="mscoree=n,b" WINEDEBUG=-all wine /tmp/ADE_installer.exe /S 2>/dev/null
     rm -f /tmp/ADE_installer.exe
-    sleep 10
+    sleep 30
     ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.0/DigitalEditions.exe"
     [ ! -f "$ADE_EXE" ] && ADE_EXE="$WINEPREFIX/drive_c/Program Files/Adobe/Adobe Digital Editions 4.5/DigitalEditions.exe"
 fi
@@ -402,7 +411,7 @@ process_acsm() {
     ACSM_WIN=$(winepath -w "$(realpath "$ACSM_FILE")")
     MARKER=$(mktemp)
 
-    WINEDEBUG=-all wine "$ADE_EXE" "$ACSM_WIN" >/dev/null 2>&1 &
+    WINEDLLOVERRIDES="mscoree=n,b" WINEDEBUG=-all wine "$ADE_EXE" "$ACSM_WIN" >/dev/null 2>&1 &
     ADE_PID=$!
 
     NEW_FILE=""
