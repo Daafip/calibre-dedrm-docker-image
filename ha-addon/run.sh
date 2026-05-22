@@ -109,21 +109,27 @@ fi
 
 push_to_send2ereader() {
     local epub="$1" base_url="${2%/}"
-    local COOKIEJAR CODE STATUS DOWNLOAD_URL
+    local COOKIEJAR CODE UPLOAD_RESP SUCCESS EPUBNAME
     COOKIEJAR=$(mktemp)
+
     CODE=$(curl -sf -c "$COOKIEJAR" -X POST "$base_url/generate" 2>/dev/null || true)
     if [ -z "$CODE" ]; then
         rm -f "$COOKIEJAR"; echo ""; return
     fi
+
+    local STATUS
     STATUS=$(curl -sf -b "$COOKIEJAR" -o /dev/null -w "%{http_code}" \
         -F "key=$CODE" -F "file=@$epub;type=application/epub+zip" \
         "$base_url/upload" 2>/dev/null || echo "000")
     rm -f "$COOKIEJAR"
     [ "$STATUS" != "200" ] && echo "" && return
-    DOWNLOAD_URL=$(curl -sf "$base_url/status/$CODE" 2>/dev/null \
-        | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('urls',[''])[0])" \
-        2>/dev/null || true)
-    echo "${DOWNLOAD_URL:-$base_url/$CODE}"
+
+    # Download route is GET /:filename?key=CODE — URL-encode the epub basename
+    EPUBNAME=$(python3 -c "
+import sys, urllib.parse, os
+print(urllib.parse.quote(os.path.basename(sys.argv[1]), safe=''))
+" "$epub")
+    echo "$base_url/$EPUBNAME?key=$CODE"
 }
 
 notify_ha() {

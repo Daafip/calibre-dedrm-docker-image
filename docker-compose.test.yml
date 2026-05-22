@@ -25,3 +25,10 @@ services:
       - "8099:8099"
     stdin_open: true
     tty: true
+
+  send2ereader:
+    build:
+      context: ./ha-addon-send2ereader
+    image: calibre-dedrm-send2ereader
+    ports:
+      - "3001:3001"
