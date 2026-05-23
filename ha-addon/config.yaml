@@ -1,12 +1,12 @@
 name: "Calibre DeDRM"
 description: >
   Watches /share/calibre-dedrm/input for .acsm files and converts them to DRM-free ePubs using libgourou (native ADEPT) + Calibre DeDRM. No Wine required. Output lands in /share/calibre-dedrm/books.
-version: "1.7.0"
+version: "1.7.1"
 slug: "calibre_dedrm"
 init: false
 homeassistant_api: true
-panel_icon: mdi:Bookshelf
-panel_title: Bieb boeken
+panel_icon: mdi:bookshelf
+panel_title: Loan books
 ingress: true
 ingress_port: 8099
 arch:
@@ -36,4 +36,4 @@ schema:
   adobe_password: password
   send2ereader_url: str
   notify_services:
-    - str
+  - str
