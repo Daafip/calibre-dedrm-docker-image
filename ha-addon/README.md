@@ -1,54 +1,18 @@
 # Calibre DeDRM — Home Assistant Add-on
 
-Watches `/share/calibre-dedrm/input/` for `.acsm` files, decrypts them to DRM-free ePubs using Adobe Digital Editions + Calibre DeDRM under Wine, and writes the output to `/share/calibre-dedrm/books/`.
+Watches `/share/calibre-dedrm/input/` for `.acsm` files, decrypts them to DRM-free ePubs using **libgourou** (native Linux ADEPT — no Wine) + Calibre DeDRM, and writes the output to `/share/calibre-dedrm/books/`.
 
 Optionally pushes each decrypted book to a [send2ereader](../ha-addon-send2ereader/README.md) instance and sends an HA notification with the download code.
 
-> **Architecture note:** Wine only runs on `amd64`. This add-on will not install on Raspberry Pi (aarch64/armv7).
-
----
-
-## Required files
-
-The add-on image downloads some dependencies at build time. If a download fails (no internet during HA build, CDN unreachable), you must place the files manually in `/share/calibre-dedrm/resources/` on the HA host **before starting the add-on for the first time**.
-
-| File | Where to get it | Build-time auto-download? |
-| --- | --- | --- |
-| `ADE_4.0.3_Installer.exe` | [Adobe Digital Editions download page](https://www.adobe.com/solutions/ebook/digital-editions/download.html) — use 4.0.3, not 4.5 | Yes (from Adobe CDN) |
-| `python-3.12.7.exe` | [python.org/ftp/python/3.12.7](https://www.python.org/ftp/python/3.12.7/python-3.12.7.exe) — **32-bit only**, no `-amd64` in filename | Yes (from python.org) |
-
-Place fallback files here on the HA host:
-
-```
-/share/calibre-dedrm/resources/ADE_4.0.3_Installer.exe
-/share/calibre-dedrm/resources/python-3.12.7.exe
-```
-
-Accessible via SSH, Samba, or the HA File Editor add-on under `/share/calibre-dedrm/resources/`.
+> **Architecture note:** `amd64` only (libgourou build). Will not run on Raspberry Pi (aarch64/armv7).
 
 ---
 
 ## First-run setup
 
-First start takes **10–20 minutes**: Wine prefix initialisation, .NET 4.8 (winetricks), Python, and ADE all install from scratch. Subsequent starts are instant — everything is persisted in the add-on's `/data/` volume.
+First start activates the device with Adobe's servers (~5 seconds). Subsequent starts are instant — activation data is persisted in `/data/adept/`.
 
-### Authorization
-
-Pick one method:
-
-**A — Headless (recommended for servers/HA):**
-Set `adobe_email` and `adobe_password` in the add-on **Configuration** tab. The add-on installs ADE silently, opens it under a virtual display, and automates the Help → Authorize Computer dialog.
-
-**B — Snapshot (most reliable — no credentials needed after first auth):**
-Authorize once on any machine using the standalone Docker setup, create a tarball:
-```bash
-docker compose down
-tar -czf wineprefix-authorized.tar.gz -C volumes wineprefix/
-```
-Copy the tarball to `/share/calibre-dedrm/` on the HA host, then set `wineprefix_snapshot` in the Configuration tab to `/share/calibre-dedrm/wineprefix-authorized.tar.gz`.
-
-**C — Interactive (requires a display, one-time only):**
-Not available via the HA add-on. Use the standalone `docker-compose.yml` on a desktop machine instead, then switch to method B.
+Set `adobe_email` and `adobe_password` in the **Configuration** tab before starting. After successful activation the credentials are no longer needed for day-to-day processing; they are only used again if `/data/adept/` is deleted.
 
 ---
 
@@ -56,23 +20,22 @@ Not available via the HA add-on. Use the standalone `docker-compose.yml` on a de
 
 | Option | Description |
 | --- | --- |
-| `adobe_email` | Adobe ID email for headless authorization |
+| `adobe_email` | Adobe ID email — required for first-time device activation |
 | `adobe_password` | Adobe ID password (masked in UI) |
-| `wineprefix_snapshot` | Path or `https://` URL to a pre-authorized wineprefix tarball |
-| `send2ereader_url` | URL of the send2ereader add-on, e.g. `http://homeassistant.local:3001` |
-| `notify_service` | HA notification service name, e.g. `mobile_app_phone` (omit the `notify.` prefix) |
+| `send2ereader_url` | URL of the send2ereader add-on, e.g. `http://homeassistant.local:3001` — leave empty to disable |
+| `notify_services` | List of HA notification service names to ping when a book is ready, e.g. `mobile_app_phone` (omit the `notify.` prefix) — leave empty to disable |
 
 ---
 
 ## Usage
 
-**Browser upload (recommended):** Open the add-on's web UI via the **Open Web UI** button in the HA sidebar. Select an `.acsm` file and click Upload — it will appear in the input queue and be processed within 30 seconds.
+**Browser upload:** Open the add-on's web UI via the sidebar. Drag and drop (or select) an `.acsm` file and click **Upload** — it is queued immediately.
 
-**Manual drop:** Place `.acsm` files directly into `/share/calibre-dedrm/input/` via SSH, Samba, or the HA File Editor add-on.
+**Manual drop:** Place `.acsm` files in `/share/calibre-dedrm/input/` via SSH, Samba, or the HA File Editor add-on.
 
-The add-on checks every 30 seconds, processes each file, and writes the decrypted ePub to `/share/calibre-dedrm/books/`. Files that fail are renamed to `.failed`.
+The add-on polls every 30 seconds, processes each file, and writes the decrypted ePub to `/share/calibre-dedrm/books/`. Files that fail are renamed to `.failed`.
 
-If `send2ereader_url` is set, the ePub is also pushed there automatically and the short code is logged and optionally sent as an HA notification.
+If `send2ereader_url` is configured, the ePub is also pushed there automatically. A 4-character code is logged and optionally sent as an HA notification — enter it on your Kobo browser to download the book.
 
 ---
 
@@ -80,24 +43,21 @@ If `send2ereader_url` is set, the ePub is also pushed there automatically and th
 
 | Path in container | Purpose |
 | --- | --- |
-| `/data/wineprefix` | Wine prefix — ADE, Python, activation keys. Persisted across restarts. |
-| `/data/calibre-config` | Calibre library and DeDRM plugin config |
-| `/share/calibre-dedrm/input` | Drop `.acsm` files here |
-| `/share/calibre-dedrm/books` | Decrypted ePub output |
-| `/share/calibre-dedrm/resources` | Fallback location for ADE and Python installers |
+| `/data/adept/` | libgourou activation data — persisted across restarts |
+| `/data/calibre-config/` | Calibre plugin state and DeDRM marker |
+| `/share/calibre-dedrm/input/` | Drop `.acsm` files here |
+| `/share/calibre-dedrm/books/` | Decrypted ePub output |
+| `/share/calibre-dedrm/resources/` | Optional: place `DeDRM_Plugin.zip` / `Obok_plugin.zip` here if the build-time download fails |
 
 ---
 
 ## Troubleshooting
 
-**`ERROR: Python 3.12 (32-bit) installer not found`**
-The build-time download from python.org failed. Place `python-3.12.7.exe` (not `-amd64`) in `/share/calibre-dedrm/resources/` and restart the add-on.
-
-**`ERROR: No ADE installer found`**
-The build-time download from Adobe's CDN failed. Place `ADE_4.0.3_Installer.exe` in `/share/calibre-dedrm/resources/` and restart the add-on.
-
 **`.failed` files in input folder**
-ADE could not download the book. Most common causes: ADE is not authorized, or the ACSM has expired (Adobe ACSM files expire after ~60 days). Check the add-on log for details.
+Check the add-on log. Common causes: device not activated (wrong credentials), ACSM file has expired (Adobe ACSM files are valid ~60 days), or no internet access to Adobe's fulfillment servers.
 
-**BindImageEx / VCRUNTIME errors in the log during first start**
-These are expected Wine noise from the .NET 4.8 post-install optimizer. They do not indicate failure — the installation completes successfully despite them.
+**`Invalid activation file` in the log**
+A previous activation attempt failed and left a partial `activation.xml`. Delete `/data/adept/` via SSH or the File Editor and restart the add-on with correct credentials.
+
+**Notifications not arriving**
+Ensure `homeassistant_api: true` is in the add-on config (it is, from v1.6.0 onward). Check that the service name in `notify_services` matches what HA shows under **Developer Tools → Services** (e.g. `mobile_app_davids_phone`, without the `notify.` prefix).
