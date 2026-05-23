@@ -14,26 +14,126 @@ PAGE = """\
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Calibre DeDRM</title>
 <style>
-  body {{ font-family: sans-serif; max-width: 520px; margin: 40px auto; padding: 0 20px; }}
-  h1 {{ font-size: 1.4em; margin-bottom: 4px; }}
-  p {{ color: #555; margin: 0 0 16px; }}
-  input[type=file] {{ display: block; margin: 12px 0; }}
-  button {{ padding: 8px 22px; cursor: pointer; }}
-  .msg {{ margin-top: 16px; padding: 10px 14px; border-radius: 4px; }}
-  .ok  {{ background: #d4edda; color: #155724; }}
-  .err {{ background: #f8d7da; color: #721c24; }}
+  *, *::before, *::after {{ box-sizing: border-box; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f0f2f5;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 20px;
+  }}
+  .card {{
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 16px rgba(0,0,0,.10);
+    padding: 36px 40px 32px;
+    width: 100%;
+    max-width: 480px;
+  }}
+  .logo {{
+    width: 48px; height: 48px;
+    background: #03a9f4;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 20px;
+  }}
+  .logo svg {{ fill: #fff; }}
+  h1 {{ font-size: 1.35em; font-weight: 700; margin: 0 0 6px; color: #111; }}
+  .sub {{ color: #777; font-size: .9em; margin: 0 0 28px; }}
+  .drop-zone {{
+    border: 2px dashed #c8cdd5;
+    border-radius: 8px;
+    padding: 36px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+    position: relative;
+  }}
+  .drop-zone:hover, .drop-zone.over {{ border-color: #03a9f4; background: #f0faff; }}
+  .drop-zone input {{
+    position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }}
+  .drop-icon {{ font-size: 2.2em; margin-bottom: 8px; }}
+  .drop-label {{ color: #555; font-size: .95em; }}
+  .drop-label strong {{ color: #03a9f4; }}
+  .file-name {{
+    margin-top: 10px; font-size: .88em; color: #333;
+    background: #f0f2f5; border-radius: 4px; padding: 4px 10px;
+    display: none;
+  }}
+  button {{
+    margin-top: 20px;
+    width: 100%;
+    padding: 11px;
+    background: #03a9f4;
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    font-size: 1em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s;
+  }}
+  button:hover {{ background: #0290d0; }}
+  button:disabled {{ background: #a0d8f1; cursor: default; }}
+  .msg {{
+    margin-top: 20px;
+    padding: 12px 16px;
+    border-radius: 7px;
+    font-size: .92em;
+    line-height: 1.45;
+  }}
+  .ok  {{ background: #e8f5e9; color: #1b5e20; border-left: 4px solid #43a047; }}
+  .err {{ background: #fdecea; color: #b71c1c; border-left: 4px solid #e53935; }}
 </style>
 </head>
 <body>
-<h1>Upload ACSM</h1>
-<p>Select an <code>.acsm</code> file. It will be queued and decrypted within 30 seconds.</p>
-<form method="post" enctype="multipart/form-data">
-  <input type="file" name="acsm" accept=".acsm" required>
-  <button type="submit">Upload</button>
-</form>
-{message}
+<div class="card">
+  <div class="logo">
+    <svg xmlns="http://www.w3.org/2000/svg" height="28" viewBox="0 0 24 24" width="28">
+      <path d="M19 9h-4V3H9v6H5l7 7 7-7zm-8 2V5h2v6h1.17L12 13.17 9.83 11H11zm-6 7h14v2H5v-2z"/>
+    </svg>
+  </div>
+  <h1>Upload ACSM</h1>
+  <p class="sub">Drop your library loan file — it will be decrypted within 30&nbsp;seconds.</p>
+  <form method="post" enctype="multipart/form-data" id="form">
+    <div class="drop-zone" id="zone">
+      <input type="file" name="acsm" accept=".acsm" required id="picker">
+      <div class="drop-icon">📂</div>
+      <div class="drop-label"><strong>Choose file</strong> or drag &amp; drop here</div>
+    </div>
+    <div class="file-name" id="fname"></div>
+    <button type="submit" id="btn">Upload</button>
+  </form>
+  {message}
+</div>
+<script>
+  var picker = document.getElementById('picker');
+  var zone   = document.getElementById('zone');
+  var fname  = document.getElementById('fname');
+  var btn    = document.getElementById('btn');
+  picker.addEventListener('change', function() {{
+    if (picker.files.length) {{
+      fname.textContent = picker.files[0].name;
+      fname.style.display = 'block';
+    }}
+  }});
+  ['dragover','dragenter'].forEach(function(e) {{
+    zone.addEventListener(e, function(ev) {{ ev.preventDefault(); zone.classList.add('over'); }});
+  }});
+  ['dragleave','drop'].forEach(function(e) {{
+    zone.addEventListener(e, function() {{ zone.classList.remove('over'); }});
+  }});
+  document.getElementById('form').addEventListener('submit', function() {{
+    btn.disabled = true; btn.textContent = 'Uploading…';
+  }});
+</script>
 </body>
 </html>
 """

@@ -1,21 +1,21 @@
 name: "Calibre DeDRM"
 description: >
-  Watches /share/calibre-dedrm/input for .acsm files and converts them to
-  DRM-free ePubs using libgourou (native ADEPT) + Calibre DeDRM.
-  No Wine required. Output lands in /share/calibre-dedrm/books.
-version: "1.6.0"
+  Watches /share/calibre-dedrm/input for .acsm files and converts them to DRM-free ePubs using libgourou (native ADEPT) + Calibre DeDRM. No Wine required. Output lands in /share/calibre-dedrm/books.
+version: "1.7.0"
 slug: "calibre_dedrm"
 init: false
 homeassistant_api: true
+panel_icon: mdi:Bookshelf
+panel_title: Bieb boeken
 ingress: true
 ingress_port: 8099
 arch:
-  - amd64
+- amd64
 
 # Persistent addon data (/data) and HA shared storage (/share)
 map:
-  - share:rw
-  - data:rw
+- share:rw
+- data:rw
 
 options:
   # Adobe ID credentials for device activation (required on first run).
@@ -27,12 +27,13 @@ options:
   # e.g. http://homeassistant.local:3001 or http://<HA-IP>:3001
   # Leave empty to disable.
   send2ereader_url: ""
-  # HA notification service to ping when a book is ready (e.g. mobile_app_phone).
+  # HA notification services to ping when a book is ready (e.g. mobile_app_phone).
   # Uses the Supervisor token — no extra auth needed. Leave empty to disable.
-  notify_service: ""
+  notify_services: []
 
 schema:
   adobe_email: email
   adobe_password: password
   send2ereader_url: str
-  notify_service: str
+  notify_services:
+    - str

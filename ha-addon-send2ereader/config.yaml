@@ -1,7 +1,7 @@
 name: "send2ereader"
 description: >
   Self-hosted send2ereader server. When the ADE Decrypt addon finishes a book, it posts the ePub here with a short code. Open your Kobo browser, navigate to http://<HA-IP>:3001/<CODE>, and the book downloads directly.
-version: "1.6.0"
+version: "1.7.0"
 slug: "send2ereader"
 init: false
 arch:

@@ -11,7 +11,7 @@ OPTIONS=/data/options.json
 ADOBE_EMAIL=$(jq --raw-output '.adobe_email // empty' "$OPTIONS" 2>/dev/null || true)
 ADOBE_PASSWORD=$(jq --raw-output '.adobe_password // empty' "$OPTIONS" 2>/dev/null || true)
 SEND2EREADER_URL=$(jq --raw-output '.send2ereader_url // empty' "$OPTIONS" 2>/dev/null || true)
-NOTIFY_SERVICE=$(jq --raw-output '.notify_service // empty' "$OPTIONS" 2>/dev/null || true)
+NOTIFY_SERVICES=$(jq --raw-output '.notify_services // [] | .[]' "$OPTIONS" 2>/dev/null || true)
 
 INPUT_DIR="/share/calibre-dedrm/input"
 OUTPUT_DIR="/share/calibre-dedrm/books"
@@ -213,7 +213,9 @@ process_acsm() {
             echo "│  Book ready on Kobo                      │"
             echo "│  URL  : $DOWNLOAD_URL"
             echo "└──────────────────────────────────────────┘"
-            notify_ha "Book ready" "$DOWNLOAD_URL" "${NOTIFY_SERVICE:-}"
+            while IFS= read -r _svc; do
+                [ -n "$_svc" ] && notify_ha "Book ready" "$DOWNLOAD_URL" "$_svc"
+            done <<< "$NOTIFY_SERVICES"
         else
             echo ">>> WARNING: send2ereader upload failed (is it running at $SEND2EREADER_URL?)"
         fi
