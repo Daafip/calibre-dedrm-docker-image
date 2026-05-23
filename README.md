@@ -2,6 +2,17 @@
 
 Automatically converts `.acsm` files to DRM-free ePubs using **libgourou** (native Linux ADEPT implementation) and Calibre DeDRM. No Wine, no Adobe Digital Editions, no 20-minute first-run setup.
 
+> [!CAUTION]
+> Removal of DRM is not in line with the license agreement when loaning use.
+> For personal use this is condoned, but still NOT legal.
+> Sharing of loaned books with DRM is NOT legal.
+> This repo merely combines existing open source code into a flow where the books remain fully local and in personal use.
+> Without the cumbersome process of using Adobe Digital Editions to transfer to an eReader.
+
+
+> [!WARNING]
+> Although extensively tested and used personally, this project was fully generated with AI.
+
 ## How it works
 
 ```
