@@ -12,6 +12,11 @@ ADOBE_EMAIL=$(jq --raw-output '.adobe_email // empty' "$OPTIONS" 2>/dev/null || 
 ADOBE_PASSWORD=$(jq --raw-output '.adobe_password // empty' "$OPTIONS" 2>/dev/null || true)
 SEND2EREADER_URL=$(jq --raw-output '.send2ereader_url // empty' "$OPTIONS" 2>/dev/null || true)
 NOTIFY_SERVICES=$(jq --raw-output '.notify_services // [] | .[]' "$OPTIONS" 2>/dev/null || true)
+EMAIL_TO=$(jq --raw-output '.email_to // [] | .[]' "$OPTIONS" 2>/dev/null || true)
+SMTP_HOST=$(jq --raw-output '.smtp_host // empty' "$OPTIONS" 2>/dev/null || true)
+SMTP_PORT=$(jq --raw-output '.smtp_port // 587' "$OPTIONS" 2>/dev/null || true)
+SMTP_USER=$(jq --raw-output '.smtp_user // empty' "$OPTIONS" 2>/dev/null || true)
+SMTP_PASS=$(jq --raw-output '.smtp_password // empty' "$OPTIONS" 2>/dev/null || true)
 
 INPUT_DIR="/share/calibre-dedrm/input"
 OUTPUT_DIR="/share/calibre-dedrm/books"
@@ -143,6 +148,23 @@ notify_ha() {
         "http://supervisor/core/api/services/notify/$service" >/dev/null || true
 }
 
+send_book_email() {
+    local epub="$1"
+    [ -z "$SMTP_HOST" ] && return 0
+    [ -z "$EMAIL_TO" ] && return 0
+    while IFS= read -r _to; do
+        [ -z "$_to" ] && continue
+        echo ">>> Emailing $(basename "$epub") to $_to..."
+        if SMTP_HOST="$SMTP_HOST" SMTP_PORT="$SMTP_PORT" \
+           SMTP_USER="$SMTP_USER" SMTP_PASS="$SMTP_PASS" \
+           python3 /send_email.py "$_to" "$epub"; then
+            echo ">>> Email sent to $_to."
+        else
+            echo ">>> WARNING: Email to $_to failed."
+        fi
+    done <<< "$EMAIL_TO"
+}
+
 # ── Upload server (HA ingress) ────────────────────────────────────────────────
 INPUT_DIR="$INPUT_DIR" INGRESS_PORT="${INGRESS_PORT:-8099}" \
     python3 /upload_server.py &
@@ -219,6 +241,10 @@ process_acsm() {
         else
             echo ">>> WARNING: send2ereader upload failed (is it running at $SEND2EREADER_URL?)"
         fi
+    fi
+
+    if [ -n "${EXPORTED_EPUB:-}" ]; then
+        send_book_email "$EXPORTED_EPUB"
     fi
 }
 

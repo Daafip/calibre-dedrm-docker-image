@@ -24,6 +24,11 @@ Set `adobe_email` and `adobe_password` in the **Configuration** tab before start
 | `adobe_password` | Adobe ID password (masked in UI) |
 | `send2ereader_url` | URL of the send2ereader add-on, e.g. `http://homeassistant.local:3001` — leave empty to disable |
 | `notify_services` | List of HA notification service names to ping when a book is ready, e.g. `mobile_app_phone` (omit the `notify.` prefix) — leave empty to disable |
+| `email_to` | List of email addresses to send the decrypted ePub to as an attachment — leave empty to disable |
+| `smtp_host` | SMTP server hostname, e.g. `smtp.gmail.com` — required to enable email delivery |
+| `smtp_port` | SMTP port (default `587`, STARTTLS) |
+| `smtp_user` | SMTP login username (usually your email address) |
+| `smtp_password` | SMTP password or app password (masked in UI) |
 
 ---
 

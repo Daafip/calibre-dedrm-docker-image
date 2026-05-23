@@ -3,6 +3,7 @@ FROM $BUILD_FROM
 
 COPY run.sh /run.sh
 COPY upload_server.py /upload_server.py
+COPY send_email.py /send_email.py
 RUN chmod +x /run.sh
 
 ARG BUILD_VERSION=dev
