@@ -1,199 +1,103 @@
-# Calibre + DeDRM + ADE in Docker — Implementation Notes
+# Implementation Notes
 
-Reproducible Docker setup that decrypts Adobe ADEPT-DRM'd ePubs (Kobo, library loans, Google Play, etc.) via Calibre's DeDRM plugin, with Adobe Digital Editions running under Wine inside the container. Authorized once, persisted via host volumes, reused indefinitely.
+**Status: working as of 2026-05-22.**
 
-**Status: complete and working as of 2026-05-19.**
+## Architecture decision: libgourou instead of Wine + ADE
 
-## Why this setup
+The original implementation ran Adobe Digital Editions 4.0.3 under Wine with dotnet48. It worked but was fragile:
 
-- Native Wine setup is fragile and pollutes the host. Container isolates it.
-- Authorization is interactive (Adobe ID login in ADE's GUI), so the image cannot be fully pre-baked. First run uses X11 forwarding to authorize; afterwards the prefix lives in a host volume and the container is headless.
-- ADE installer cannot be redistributed (Adobe license), so it must be supplied locally — added to the build context, not downloaded at build time.
-- This is Adobe ADEPT only. Kindle DRM is a different pipeline (Kindle for PC, different keys).
+- First run took 10–20 minutes (winetricks + Python + ADE install)
+- dotnet48 bakes absolute CLR paths into the prefix at install time — the prefix cannot be copied to a different path, making pre-built snapshots useless
+- ADE headless authorization via xdotool broke every time Wine's .NET initialization diverged slightly
+- Root cause: Wine's .NET CLR initialization is non-deterministic when used headlessly
 
-## Working pipeline
+**libgourou** is a native Linux C++ implementation of the Adobe ADEPT protocol. It replaces the entire Wine stack:
 
-**Full automated pipeline (one command):**
+| Old | New |
+| --- | --- |
+| Wine + dotnet48 + ADE | libgourou (C++, no Wine) |
+| xdotool GUI automation | `adept_activate -u email -p password` |
+| ADE ACSM download | `acsmdownloader -f book.acsm` |
+| ADE + DeDRM plugin | `adept_remove -f enc.epub -o clean.epub` |
+| 10–20 min first run | ~5 second activation |
 
-Drop the `.acsm` file into `./volumes/ade-books/`, then:
+## Building libgourou
 
-```bash
-docker compose run --rm calibre dedrm /home/calibre/ade-books-input/book.acsm
-```
+libgourou uses a plain Makefile (not CMake). `scripts/setup.sh` clones the uPDFParser dependency. Two gotchas:
 
-ADE opens in the background, downloads the epub, DeDRM decrypts it. Output lands in `./volumes/books/`.
+1. **Run `setup.sh` before parallel make.** `make -j$(nproc)` starts compiling `libgourou.cpp` in parallel with `setup.sh` cloning uPDFParser. The header `uPDFParser.h` isn't ready yet → build fails. Fix: run `./scripts/setup.sh` explicitly first, then `make -j$(nproc)`.
 
-**Manual fallback:**
+2. **Alpine BusyBox sed does not support `,+N` relative addresses.** `sed '/pattern/,+3d'` silently breaks on Alpine. Use `node -e` to patch JS files instead.
 
-1. `xhost +local:docker && docker compose run --rm calibre ade` — open ADE, redeem the file; epub lands inside the wineprefix at `My Digital Editions/` (symlinked to `/home/calibre/ade-books` inside the container)
-2. `docker compose run --rm calibre decrypt /home/calibre/ade-books/book.epub` — headless CLI decrypt; output goes to `./volumes/books/`
+## Activation persistence
 
-## Volume layout
+libgourou stores activation data in `~/.config/adept/`. The addon symlinks `/root/.config/adept` → `/data/adept/` so the data survives container restarts.
 
-```
-volumes/
-├── wineprefix/       # ADE authorization + Python — do not wipe without erasing ADE auth first
-├── calibre-config/   # Calibre library and plugin config
-├── books/            # CLI decrypt output
-├── ade-books/        # ADE My Digital Editions — books downloaded via ASCM land here
-└── winetricks-cache/ # speeds up rebuilds that need winetricks
-```
-
-## What actually worked vs the original plan
-
-| Topic | Original plan | What was needed |
-|---|---|---|
-| Base image | ubuntu:24.04 | ubuntu:24.04 ✓ |
-| Windows version | win7 | **win10** — Python 3.12 requires Win8+; win7 silently fails the installer |
-| winetricks components | dotnet40 corefonts tahoma windowscodecs | **dotnet48, no windowscodecs** — dotnet40 fails on Wine 9.x with `BindImageEx` errors; dotnet48 is cumulative and reliable. windowscodecs conflicts with Wine 9's built-in WIC. |
-| Python PATH | `PrependPath=1` during installer | **manual `wine reg add HKCU\Environment` + HKLM system PATH** — PrependPath silently fails under Wine |
-| Python exe path | drive_c/Python312/python.exe | `drive_c/users/calibre/AppData/Local/Programs/Python/Python312-32/python.exe` |
-| DeDRM config file | calibre/plugins/DeDRM.json | **plugins/dedrm.json** (lowercase, one level up) |
-| DeDRM WinePythonCLI | finds python.exe by PATH | **must patch wineutils.py** — Wine uses ShellExecute for name-based lookup, which fails for console apps; full path forces CreateProcess |
-| Wine Gecko | assumed present | must pre-fetch `wine_gecko-2.47.4-x86.msi`; CDN unreliable at build time so wrapped in `|| true` |
-| UID pinning | create calibre at 1000 | Ubuntu 24.04 pre-creates `ubuntu` at UID 1000 — must `userdel` it first |
-| X11 / MIT-SHM crash | not anticipated | `ipc: host` in docker-compose + `libgl1:i386` in image |
-| ADE books volume | nested mount inside wineprefix | **do not mount inside wineprefix** — overlays hide ADE library files and corrupts state. Symlink `/home/calibre/ade-books` → wineprefix in entrypoint; separate `ade-books-input` mount for ACSM input files |
-| Volume ownership | Docker auto-creates dirs as root | must `mkdir -p volumes/*` on host before first run; Docker-created dirs are owned by root and container user can't write |
-
-## Gotchas
-
-- **Wine prefix must stay win32.** `WINEARCH=win32` everywhere. `syswow64\ntdll.dll error c0000135` = prefix went 64-bit — erase ADE auth first (`Help → Erase Authorization`), then delete `volumes/wineprefix/`.
-- **Python must be 32-bit.** Installer without `-amd64` in the filename. DeDRM's `WinePythonCLI` looks for `python.exe` by name; the Windows PATH registry entry must exist.
-- **`corefonts` + `tahoma` are mandatory.** ADE crashes in `FontFamily.get_FirstFontFamily()` without them.
-- **win10 mode required.** ADE needs Win7+, Python 3.12 needs Win8+. win10 satisfies both.
-- **`windowscodecs` must be omitted.** Wine 9 ships its own WIC; the native override breaks the prefix.
-- **ADE 4.5 vs 4.0.3.** If 4.5 refuses to authorize under Wine 9.x, rebuild with `ADE_4.0.3_Installer.exe`. The plugin doesn't care which version produced the key.
-- **Adobe authorization limit.** ~6 devices per Adobe ID. Use `Help → Erase Authorization` in ADE before wiping `volumes/wineprefix/`.
-- **`ntlm_auth not found` warnings are noise** — silenced by the `winbind` package.
-- **First Calibre import failure after setup** usually means `adobewineprefix` in `plugins/dedrm.json` is wrong. Must be the container path `/home/calibre/wineprefix`.
-- **`dotnet40` fails on Wine 9.x** with `BindImageEx Import ... was not found` errors. Use `dotnet48` instead — it's cumulative and installs cleanly.
-- **Volume dir ownership**: if Docker creates `volumes/wineprefix/` automatically, it's owned by root. The container's `calibre` user (UID 1000) can't write to it. Always `mkdir -p volumes/*` on the host before first `docker compose run`.
-- **DeDRM `wine python.exe` returns "not python3"**: Wine uses ShellExecute for name-based executable lookup, which fails for console apps. The entrypoint patches `wineutils.py` in the DeDRM plugin zip to use the full path (`C:\users\calibre\...\python.exe`), which forces CreateProcess and works correctly.
-- **Do not mount `ade-books` inside the wineprefix path**: a Docker bind mount inside another bind mount hides the existing directory contents, breaking ADE's library state. The `ade-books-input` volume is mounted separately at `/home/calibre/ade-books-input` for dropping in ACSM input files.
-
-## Headless authorization
-
-Three strategies, in order of reliability:
-
-### Strategy 1 — Snapshot restore (`WINEPREFIX_SNAPSHOT`)
-
-Authorize once interactively, then tar the result:
+A failed activation (wrong credentials) writes a partial `activation.xml` containing only service URLs — no `<adept:user>` element. Checking for file existence is not sufficient; the correct check is:
 
 ```bash
-docker compose down
-tar -czf wineprefix-authorized.tar.gz -C volumes wineprefix/
+grep -q 'adept:user' "$ADEPT_DIR/activation.xml" 2>/dev/null
 ```
 
-On any new host (including Home Assistant), set the env var and run normally:
+If this check fails on startup, activation runs again regardless of whether the file exists.
 
-```bash
-WINEPREFIX_SNAPSHOT=/path/to/wineprefix-authorized.tar.gz docker compose run --rm calibre dedrm ...
-# or via .env / docker-compose.yml environment section
-# also accepts https:// URLs
+## send2ereader integration
+
+send2ereader is designed for the receiving device (Kobo) to generate a code and display it, then a sender uploads to that code. Our flow is the reverse: the addon generates the code and uploads the book, then the user enters the code on the Kobo.
+
+Three patches applied to `index.js` at build time via the Dockerfile:
+
+| Patch | Why |
+| --- | --- |
+| `expireDelay: 30 → 600` | 30 seconds is not enough time to open a Kobo browser and type a code |
+| Remove UA check in `downloadFile` | The download UA (Kobo browser) will never match the generator UA (curl from the addon) |
+| Remove UA check in `/status/:key` | Same reason — Kobo polls status but the key was created by curl |
+
+The UA check in the original code is a security measure for the public send.djazz.se instance to prevent hotlinking. For a self-hosted local server it is unnecessary.
+
+A fourth patch adds a code-entry form to `static/download.html`. Without it the Kobo page only shows the code it generated for itself (waiting for someone to send to it); there is no way to enter an incoming code from the addon. The patch adds an input field + "Get book" button below the existing display. Entered code is validated against `/status/` and if a file is found, the download link appears.
+
+## send2ereader upload API
+
+The `/upload` endpoint returns plain text (the success message), not JSON. Checking HTTP status `200` is the correct success signal. The upload response does not include the download URL — it must be constructed from the epub filename and the key:
+
+```
+http://<server>:<port>/<URL-encoded filename>?key=<CODE>
 ```
 
-The tarball is extracted on the first run when `$WINEPREFIX/.winetricks_done` is absent. All subsequent runs skip the restore. **Treat as secret** — it contains the device key tied to your Adobe ID.
+The `/status/:key` response includes `urls: []` (empty) because the server has no configured base URL. The download.html JavaScript falls back to constructing the URL from `window.location.origin` — but for the Kobo this is irrelevant since we send the pre-constructed URL in the addon logs and the user types the 4-char code on the Kobo manually.
 
-### Strategy 2 — Headless credentials (`ADOBE_EMAIL` + `ADOBE_PASSWORD`)
+## DeDRM marker check
 
-Set in `.env` or HA secrets store:
+The marker file `$CALIBRE_CONFIG_DIRECTORY/plugins/dedrm.json` is created after installing the DeDRM and Obok plugins so installation only runs once. The marker contains a minimal valid DeDRM config (no Wine-specific `adobewineprefix` field needed since libgourou handles decryption directly).
 
-```ini
-ADOBE_EMAIL=you@example.com
-ADOBE_PASSWORD=yourpassword
-```
+## Docker Compose test stack
 
-The entrypoint installs ADE silently (`/S` NSIS flag), starts it under Xvfb, and automates the **Help → Authorize Computer** dialog via xdotool (`alt+h → a → Tab/type/Return`). Polls the Wine registry for the ADEPT activation key for up to 60 s.
+`docker-compose.test.yml` provides three services:
 
-**Caveat:** depends on ADE 4.0.3's menu layout. If the key sequence doesn't land on "Authorize Computer...", the automation silently fails and logs a warning — fall back to Option B or snapshot.
+- `base` — builds the base image (compiles libgourou), exits immediately
+- `addon` — mounts `test-data/` directories in place of HA's `/data/` and `/share/`
+- `send2ereader` — runs the patched send2ereader server on port 3001
 
-### Authorization check
+`test-data/` contents (all gitignored):
 
-`ade_is_authorized()` greps `$WINEPREFIX/user.reg` for the `Adept\Activation` registry key. Runs on every startup; skips all auth logic if already authorized.
+| Path | Purpose |
+| --- | --- |
+| `options.json` | Adobe ID credentials |
+| `adept/` | Persisted activation data |
+| `calibre-config/` | Calibre plugin state |
+| `input/` | Drop `.acsm` files here |
+| `books/` | Decrypted output |
+| `resources/` | `DeDRM_Plugin.zip`, `Obok_plugin.zip` |
 
-### ADE install is now silent
+## Path layout inside the addon container
 
-`wine "$ADE_INSTALLER" /S` — NSIS silent flag, no GUI click-through needed. ADE installs to its default path under the Wine prefix. A `sleep 10` follows to let the installer finish before checking for the executable.
-
-## HA addon — local testing (without a real HA install)
-
-Build and run the addon container directly on any amd64 Linux machine. HA's supervisor is not needed — just Docker.
-
-```bash
-# 1. Build the addon image (from repo root)
-docker build -t calibre-dedrm-ha ha-addon/
-
-# 2. Create the directory tree that HA's supervisor would mount
-mkdir -p /tmp/ha-test/data
-mkdir -p /tmp/ha-test/share/calibre-dedrm/{input,books,resources}
-
-# 3. Write the options.json that HA would inject
-cat > /tmp/ha-test/data/options.json <<'EOF'
-{
-  "adobe_email": "you@example.com",
-  "adobe_password": "yourpassword",
-  "wineprefix_snapshot": ""
-}
-EOF
-
-# 4. Run the addon
-docker run --rm -it \
-  -v /tmp/ha-test/data:/data \
-  -v /tmp/ha-test/share:/share \
-  calibre-dedrm-ha
-```
-
-### Test snapshot restore
-
-```bash
-# Create snapshot from the working standalone prefix
-tar -czf /tmp/ha-test/share/calibre-dedrm/wineprefix-snapshot.tar.gz \
-    -C volumes wineprefix/
-
-# Point options at it (credentials not needed)
-cat > /tmp/ha-test/data/options.json <<'EOF'
-{
-  "adobe_email": "",
-  "adobe_password": "",
-  "wineprefix_snapshot": "/share/calibre-dedrm/wineprefix-snapshot.tar.gz"
-}
-EOF
-
-# Wipe any previous data dir so the restore is triggered
-rm -rf /tmp/ha-test/data/wineprefix
-
-docker run --rm -it \
-  -v /tmp/ha-test/data:/data \
-  -v /tmp/ha-test/share:/share \
-  calibre-dedrm-ha
-```
-
-### Test ACSM processing (once the addon is running)
-
-```bash
-# Drop an ACSM file into the input folder while the container is running
-cp your-book.acsm /tmp/ha-test/share/calibre-dedrm/input/
-
-# The addon polls every 30 s — decrypted epub will appear in:
-ls /tmp/ha-test/share/calibre-dedrm/books/
-```
-
-### Paths differ from the standalone setup
-
-| | Standalone | HA addon |
-| --- | --- | --- |
-| Wine prefix | `./volumes/wineprefix` | `/data/wineprefix` |
-| Calibre config | `./volumes/calibre-config` | `/data/calibre-config` |
-| ADE books dir | `./volumes/ade-books` | `/data/wineprefix/drive_c/users/root/Documents/My Digital Editions` |
-| Output | `./volumes/books` | `/share/calibre-dedrm/books` |
-| Input ACSM | `./volumes/ade-books-input` | `/share/calibre-dedrm/input` |
-| Credentials | `.env` file | HA addon Configuration tab |
-
-Wine runs as root in the HA addon, so user-specific paths inside the prefix use `root` instead of `calibre` (e.g. `drive_c/users/root/AppData/...`).
-
-## Reference
-
-- [noDRM DeDRM_tools](https://github.com/noDRM/DeDRM_tools)
-- [DeDRM FAQs](https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md)
-- [Winetricks](https://github.com/Winetricks/winetricks)
+| Path | Contents |
+| --- | --- |
+| `/data/options.json` | HA-injected addon config |
+| `/data/adept/` | libgourou activation (symlinked from `/root/.config/adept/`) |
+| `/data/calibre-config/` | Calibre plugin config and DeDRM marker |
+| `/resources/` | DeDRM/Obok plugin zips (built into base image) |
+| `/share/calibre-dedrm/input/` | ACSM input watch directory |
+| `/share/calibre-dedrm/books/` | Decrypted ePub output |
+| `/share/calibre-dedrm/resources/` | User-supplied plugin zips (fallback if `/resources/` is empty) |

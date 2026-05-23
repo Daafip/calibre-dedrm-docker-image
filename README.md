@@ -1,192 +1,125 @@
-# Calibre + DeDRM + Adobe Digital Editions in Docker
+# Calibre DeDRM — Home Assistant Addon
 
-Decrypts Adobe ADEPT-DRM'd ePubs (Kobo, library loans, Google Play Books, etc.) using Calibre's DeDRM plugin with Adobe Digital Editions running under Wine inside the container.
+Automatically converts `.acsm` files to DRM-free ePubs using **libgourou** (native Linux ADEPT implementation) and Calibre DeDRM. No Wine, no Adobe Digital Editions, no 20-minute first-run setup.
 
-**What this does not cover:** Kindle DRM is a separate pipeline (Kindle for PC, different keys). This image is ADEPT only.
+## How it works
 
-## Prerequisites
-
-Before building the image, place the following files in `./resources/`:
-
-| File | Where to get it |
-| --- | --- |
-| `ADE_4.5_Installer.exe` | Adobe's [Digital Editions download page](https://www.adobe.com/solutions/ebook/digital-editions/download.html). Use 4.0.3 if 4.5 refuses to authorize under Wine 9.x. |
-| `python-3.12.x.exe` | [python.org](https://www.python.org/downloads/windows/) — **must be the 32-bit installer** (no `-amd64` in the filename) |
-
-`DeDRM_Plugin.zip` and `Obok_plugin.zip` are already included in the repo.
-
-You also need:
-
-- Docker and Docker Compose installed on the host
-- An Adobe ID (free). Note: Adobe limits each ID to ~6 device authorizations. Use **Help → Erase Authorization** in ADE before wiping the volume if you iterate.
-
-## First-time setup
-
-```bash
-docker compose build
+```
+.acsm file
+    │
+    ▼
+adept_activate      ← one-time device registration with Adobe ID
+    │
+    ▼
+acsmdownloader      ← downloads the DRM-protected ePub from Adobe's servers
+    │
+    ▼
+adept_remove        ← strips ADEPT DRM using the device's private key
+    │
+    ▼
+calibredb           ← imports and exports the clean ePub
+    │
+    ▼
+DRM-free ePub → /share/calibre-dedrm/books/
+                → (optional) send2ereader for Kobo delivery
 ```
 
-Then authorize ADE using whichever method fits your environment:
+Activation data is stored in `/data/adept/` and persists across restarts. The device only needs to be activated once.
 
-### Option A — headless (servers, Home Assistant, no display)
+## Repository layout
 
-Set credentials in a `.env` file (keep this file out of version control):
-
-```ini
-ADOBE_EMAIL=you@example.com
-ADOBE_PASSWORD=yourpassword
+```
+ha-addon-base/          Base Docker image — builds libgourou, downloads DeDRM plugins
+ha-addon/               Main addon — run.sh, upload UI, ACSM watch loop
+ha-addon-send2ereader/  Optional Kobo delivery server
+test/                   Integration tests for the send2ereader flow
+docker-compose.test.yml Local test stack (no HA required)
 ```
 
-Then run:
+## Home Assistant installation
 
-```bash
-docker compose run --rm calibre
-```
+1. In HA → **Settings → Add-ons → Add-on Store** → ⋮ → **Repositories** — add this repo's URL.
+2. Install **Calibre DeDRM** from the store.
+3. Configure the addon (see below) and start it.
 
-The entrypoint installs ADE silently, opens it under a virtual framebuffer, navigates to **Help → Authorize Computer**, fills in your credentials automatically, and waits for Adobe's servers to confirm. If it works, the prefix is authorized and you never need a display again.
+First start activates the device with Adobe's servers (~5 seconds). Subsequent starts are instant.
 
-> **Note:** The xdotool automation depends on ADE's menu layout. If it fails, fall back to Option B or C.
+> **Architecture:** `amd64` only (libgourou build). Will not run on Raspberry Pi or other ARM hosts.
 
-### Option B — interactive (desktop, first time only)
+## Configuration
 
-```bash
-xhost +local:docker
-docker compose run --rm calibre ade
-# ADE opens — go to Help → Authorize Computer, sign in with Adobe ID
-```
+| Option | Description |
+|---|---|
+| `adobe_email` | Adobe ID email — required for first-time activation |
+| `adobe_password` | Adobe ID password — required for first-time activation |
+| `send2ereader_url` | URL of the send2ereader addon, e.g. `http://homeassistant.local:3001` — leave empty to disable |
+| `notify_service` | HA notification service name, e.g. `mobile_app_phone` — leave empty to disable |
 
-### Option C — snapshot restore (re-deploy from an already-authorized setup)
-
-If you've already authorized on one machine, snapshot the prefix and deploy it anywhere without credentials or a display:
-
-```bash
-# 1. On the authorized machine — create the snapshot
-docker compose down
-tar -czf wineprefix-authorized.tar.gz -C volumes wineprefix/
-# Store the tarball somewhere safe — it contains your device key.
-# Treat it as a secret (equivalent to having your Adobe ID authorized).
-```
-
-```bash
-# 2. On the target machine — restore from snapshot
-# Mount the tarball or use a URL:
-WINEPREFIX_SNAPSHOT=/path/to/wineprefix-authorized.tar.gz docker compose run --rm calibre dedrm ...
-# or set it in .env / docker-compose.yml environment
-```
-
-The snapshot is extracted on the first run when `./volumes/wineprefix/` is empty, then all subsequent runs skip the restore. The tarball is ~300 MB.
-
----
-
-Regardless of which option you use, the entrypoint automatically:
-
-1. Initializes a 32-bit Wine prefix
-2. Installs `dotnet48`, `corefonts`, `tahoma`, sets Windows 10 mode
-3. Installs Python 3.12 (32-bit) and `pycryptodome`
-4. Installs Adobe Digital Editions silently
-5. Installs and configures the DeDRM and Obok plugins into Calibre
-
-After setup completes, the Wine prefix and Calibre config are persisted in `./volumes/` and reused on every subsequent run.
+After successful activation, credentials are no longer needed for processing books. They are only used if the activation data in `/data/adept/` is deleted.
 
 ## Usage
 
-### Full pipeline: ASCM → decrypted epub (one command)
+### Drop a file
 
-Drop the `.acsm` file into `./volumes/ade-books/`, then:
+Copy an `.acsm` file to `/share/calibre-dedrm/input/` on the HA host (e.g. via Samba or SSH). The addon polls every 30 seconds and processes any `.acsm` files it finds. The decrypted ePub lands in `/share/calibre-dedrm/books/`.
 
-```bash
-docker compose run --rm calibre dedrm /home/calibre/ade-books-input/book.acsm
-```
+Failed files are renamed to `.failed`.
 
-This opens ADE in the background, waits for the download to complete, kills ADE, then decrypts the epub via DeDRM. The decrypted file lands in `./volumes/books/`.
+### Upload via browser
 
-Optional second argument to change the output directory:
+The addon exposes a file upload page via HA ingress. Open the addon in the HA sidebar, drag and drop your `.acsm` file, and click Upload. The file is queued immediately.
 
-```bash
-docker compose run --rm calibre dedrm /home/calibre/ade-books-input/book.acsm /home/calibre/ade-books-input
-```
+### Kobo delivery via send2ereader
 
-### Open ADE manually (e.g. to authorize or browse your library)
+Install the **send2ereader** addon from this same repository. Set `send2ereader_url` to `http://<HA-IP>:3001` in the Calibre DeDRM addon config.
 
-```bash
-xhost +local:docker
-docker compose run --rm calibre ade
-```
+After each successful decryption the addon:
+1. Uploads the ePub to send2ereader and logs a 4-character code, e.g. `G5VN`
+2. On your Kobo, open the browser and navigate to `http://<HA-IP>:3001`
+3. Enter the code in the "Or enter a code from the addon logs" field
+4. Tap **Get book** — the download link appears; tap it to download to the Kobo
 
-### Launch Calibre GUI
+The code is valid for 10 minutes.
 
-```bash
-xhost +local:docker
-docker compose run --rm calibre
-```
-
-### Decrypt an already-downloaded epub
+## Local testing (no HA required)
 
 ```bash
-docker compose run --rm calibre decrypt /home/calibre/ade-books-input/input.epub
+# 1. Edit test-data/options.json with your Adobe ID
+#    (created automatically; gitignored)
+
+# 2. Copy DeDRM plugins into test-data/resources/
+cp resources/DeDRM_Plugin.zip resources/Obok_plugin.zip test-data/resources/
+
+# 3. Build the base image (compiles libgourou — a few minutes)
+docker compose -f docker-compose.test.yml build base
+
+# 4. Build the addon image
+docker compose -f docker-compose.test.yml build addon
+
+# 5. Run
+docker compose -f docker-compose.test.yml up addon
 ```
 
-### Open a shell inside the container
+Drop `.acsm` files into `test-data/input/`. Output appears in `test-data/books/`.
+
+The upload UI is at [http://localhost:8099](http://localhost:8099).
+
+### Running send2ereader locally
 
 ```bash
-docker compose run --rm calibre shell
+docker compose -f docker-compose.test.yml build send2ereader
+docker compose -f docker-compose.test.yml up send2ereader
 ```
 
-## Volume layout
+### Running the integration tests
 
-```text
-volumes/
-├── wineprefix/       # ADE authorization + Python — do not wipe without erasing ADE auth first
-├── calibre-config/   # Calibre library and plugin config
-├── books/            # Decrypted output
-├── ade-books/        # Drop .acsm files here; ADE downloads epubs here too
-└── winetricks-cache/ # Speeds up rebuilds
+```bash
+# Requires send2ereader running at localhost:3001
+python3 test/test_send2ereader.py
 ```
-
-## Known gotchas
-
-- **Wine prefix must stay win32.** `WINEARCH=win32` everywhere. If you see `syswow64\ntdll.dll error c0000135`, the prefix went 64-bit — erase ADE auth first (`Help → Erase Authorization`), then delete `volumes/wineprefix/` and start over.
-- **Python must be 32-bit.** The `-amd64` filename is wrong. DeDRM probes for `python.exe` and rejects non-3.x; the Windows PATH registry entry must be set correctly.
-- **`corefonts` + `tahoma` are mandatory.** Without them ADE crashes in `FontFamily.get_FirstFontFamily()`.
-- **Windows 10 mode is required.** ADE needs Win7+, Python 3.12 needs Win8+. Win10 satisfies both.
-- **`windowscodecs` must not be installed.** Wine 9 ships its own WIC; the native override breaks the prefix.
-- **ADE 4.5 vs 4.0.3.** If 4.5 refuses to authorize under Wine 9.x, rebuild with `ADE_4.0.3_Installer.exe`. The plugin doesn't care which version produced the key.
-- **`ntlm_auth not found` warnings are noise** — silenced by the `winbind` package in the image.
-- **First Calibre import failure after setup** usually means the plugin's Wine Prefix path is wrong. It must be the container path `/home/calibre/wineprefix`, not the host path.
-
-## Home Assistant addon
-
-The `ha-addon/` directory contains a Home Assistant addon that runs as a persistent service, watching `/share/calibre-dedrm/input` for `.acsm` files and decrypting them automatically.
-
-**Architecture note:** Wine only runs on `amd64`. The addon will not install on Raspberry Pi or other ARM devices.
-
-### Install
-
-1. In HA → **Settings → Add-ons → Add-on Store** → three-dot menu → **Repositories**, add the URL of this GitHub repo.
-2. Find "Calibre DeDRM" in the store and install it.
-3. Before starting, place `ADE_4.0.3_Installer.exe` (from Adobe's website) in `/share/calibre-dedrm/resources/` on the HA host.
-4. Configure the addon (see below), then start it.
-
-First start takes 10-20 minutes: winetricks, Python, and ADE all install from scratch. Subsequent starts are instant (data persists in the addon's `/data/` volume).
-
-### Configuration
-
-In the addon's **Configuration** tab:
-
-| Option | Description |
-| --- | --- |
-| `adobe_email` | Adobe ID email — used for headless ADE authorization |
-| `adobe_password` | Adobe ID password — leave empty if using a snapshot |
-| `wineprefix_snapshot` | Path or URL to a pre-authorized wineprefix tarball (see snapshot instructions above) |
-
-The snapshot path must be accessible inside the container, e.g. `/share/calibre-dedrm/wineprefix-authorized.tar.gz` if you placed the file in `/share/calibre-dedrm/` on the HA host.
-
-### Usage
-
-Drop `.acsm` files into `/share/calibre-dedrm/input/` (accessible from the HA host at `/share/calibre-dedrm/input/` or via the Samba/SSH addon). The addon processes each file within 30 seconds and writes the decrypted ePub to `/share/calibre-dedrm/books/`. Failed files are renamed to `.failed`.
 
 ## Links
 
-- [noDRM DeDRM_tools](https://github.com/noDRM/DeDRM_tools)
-- [DeDRM FAQs](https://github.com/noDRM/DeDRM_tools/blob/master/FAQs.md)
-- [Winetricks](https://github.com/Winetricks/winetricks)
+- [libgourou](https://forge.soutade.fr/soutade/libgourou) — native Linux ADEPT implementation
+- [noDRM DeDRM_tools](https://github.com/noDRM/DeDRM_tools) — Calibre DeDRM plugin
+- [send2ereader](https://github.com/daniel-j/send2ereader) — Kobo/Kindle ebook delivery
