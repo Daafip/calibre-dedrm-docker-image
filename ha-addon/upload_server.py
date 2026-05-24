@@ -219,8 +219,18 @@ PAGE = """\
   ['dragover','dragenter'].forEach(function(e) {{
     zone.addEventListener(e, function(ev) {{ ev.preventDefault(); zone.classList.add('over'); }});
   }});
-  ['dragleave','drop'].forEach(function(e) {{
-    zone.addEventListener(e, function() {{ zone.classList.remove('over'); }});
+  zone.addEventListener('dragleave', function() {{ zone.classList.remove('over'); }});
+  zone.addEventListener('drop', function(ev) {{
+    ev.preventDefault();
+    zone.classList.remove('over');
+    var files = ev.dataTransfer && ev.dataTransfer.files;
+    if (files && files.length) {{
+      var dt = new DataTransfer();
+      dt.items.add(files[0]);
+      picker.files = dt.files;
+      fname.textContent = files[0].name;
+      fname.style.display = 'block';
+    }}
   }});
   document.getElementById('form').addEventListener('submit', function() {{
     btn.disabled = true; btn.textContent = 'Uploading…';
