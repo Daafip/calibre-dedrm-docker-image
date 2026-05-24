@@ -158,15 +158,16 @@ send_book_email() {
     local recipients="${2:-$EMAIL_TO}"
     [ -z "$SMTP_HOST" ] && return 0
     [ -z "${recipients:-}" ] && return 0
+    echo ">>> Email config: host=$SMTP_HOST port=$SMTP_PORT user=$SMTP_USER"
     while IFS= read -r _to; do
         [ -z "$_to" ] && continue
         echo ">>> Emailing $(basename "$epub") to $_to..."
         if SMTP_HOST="$SMTP_HOST" SMTP_PORT="$SMTP_PORT" \
            SMTP_USER="$SMTP_USER" SMTP_PASS="$SMTP_PASS" \
-           python3 /send_email.py "$_to" "$epub"; then
+           python3 /send_email.py "$_to" "$epub" 2>&1; then
             echo ">>> Email sent to $_to."
         else
-            echo ">>> WARNING: Email to $_to failed."
+            echo ">>> WARNING: Email to $_to failed (see error above)."
         fi
     done <<< "$recipients"
 }
@@ -178,15 +179,32 @@ INPUT_DIR="$INPUT_DIR" INGRESS_PORT="${INGRESS_PORT:-8099}" \
     python3 /upload_server.py &
 
 # ── Service loop ──────────────────────────────────────────────────────────────
+# Clean up any .processing files left by a previous crash — rename to .failed
+# so the user can inspect them and re-drop if needed.
+for _stale in "$INPUT_DIR"/*.processing; do
+    [ -f "$_stale" ] || continue
+    echo ">>> WARNING: Found stale processing file $(basename "$_stale") from a previous crash — marking as failed."
+    mv "$_stale" "${_stale%.processing}.failed" 2>/dev/null || true
+    rm -f "${_stale}.email_recipients"
+done
+
 echo ">>> Setup complete. Watching $INPUT_DIR for .acsm files (every 30 s)..."
 echo "    Output: $OUTPUT_DIR"
 [ -n "${SEND2EREADER_URL:-}" ] && echo "    send2ereader: $SEND2EREADER_URL"
 
 process_acsm() {
     local ACSM_FILE="$1"
-    local BASENAME RECIPIENTS_FILE USE_SIDECAR SIDECAR_RECIPS
+    local BASENAME WORK_FILE RECIPIENTS_FILE USE_SIDECAR SIDECAR_RECIPS
     BASENAME=$(basename "$ACSM_FILE")
-    RECIPIENTS_FILE="${ACSM_FILE}.email_recipients"
+
+    # Rename to .processing immediately — the poll loop only scans *.acsm so a
+    # container restart mid-processing won't pick this file up again.
+    WORK_FILE="${ACSM_FILE%.acsm}.processing"
+    mv "$ACSM_FILE" "$WORK_FILE"
+
+    RECIPIENTS_FILE="${WORK_FILE}.email_recipients"
+    [ -f "${ACSM_FILE}.email_recipients" ] && mv "${ACSM_FILE}.email_recipients" "$RECIPIENTS_FILE"
+
     USE_SIDECAR=false
     SIDECAR_RECIPS=""
     if [ -f "$RECIPIENTS_FILE" ]; then
@@ -199,10 +217,10 @@ process_acsm() {
     local DOWNLOAD_DIR
     DOWNLOAD_DIR=$(mktemp -d)
 
-    if ! (cd "$DOWNLOAD_DIR" && acsmdownloader -f "$(realpath "$ACSM_FILE")"); then
+    if ! (cd "$DOWNLOAD_DIR" && acsmdownloader -f "$(realpath "$WORK_FILE")"); then
         echo ">>> ERROR: Download failed for $BASENAME."
         echo "    Is the device activated? Can it reach Adobe's fulfillment servers?"
-        mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        mv "$WORK_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
         rm -f "$RECIPIENTS_FILE"
         rm -rf "$DOWNLOAD_DIR"
         return
@@ -212,7 +230,7 @@ process_acsm() {
     ENCRYPTED_FILE=$(find "$DOWNLOAD_DIR" \( -name "*.epub" -o -name "*.pdf" \) | head -1 || true)
     if [ -z "${ENCRYPTED_FILE:-}" ]; then
         echo ">>> ERROR: acsmdownloader produced no output file for $BASENAME."
-        mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        mv "$WORK_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
         rm -f "$RECIPIENTS_FILE"
         rm -rf "$DOWNLOAD_DIR"
         return
@@ -223,7 +241,7 @@ process_acsm() {
     local DRM_FREE_FILE="${ENCRYPTED_FILE%.*}_drm_free.$EXT"
     if ! adept_remove -f "$ENCRYPTED_FILE" -o "$DRM_FREE_FILE"; then
         echo ">>> ERROR: DRM removal failed for $(basename "$ENCRYPTED_FILE")."
-        mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        mv "$WORK_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
         rm -f "$RECIPIENTS_FILE"
         rm -rf "$DOWNLOAD_DIR"
         return
@@ -234,14 +252,27 @@ process_acsm() {
     TMPLIB=$(mktemp -d)
     EXPORT_MARKER=$(mktemp)
 
-    calibredb add "$DRM_FREE_FILE" --with-library "$TMPLIB"
-    calibredb export --all --to-dir "$OUTPUT_DIR" --single-dir --with-library "$TMPLIB"
+    if ! calibredb add "$DRM_FREE_FILE" --with-library "$TMPLIB"; then
+        echo ">>> ERROR: calibredb add failed for $BASENAME."
+        mv "$WORK_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        rm -f "$RECIPIENTS_FILE" "$EXPORT_MARKER"
+        rm -rf "$TMPLIB" "$DOWNLOAD_DIR"
+        return
+    fi
+
+    if ! calibredb export --all --to-dir "$OUTPUT_DIR" --single-dir --with-library "$TMPLIB"; then
+        echo ">>> ERROR: calibredb export failed for $BASENAME."
+        mv "$WORK_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        rm -f "$RECIPIENTS_FILE" "$EXPORT_MARKER"
+        rm -rf "$TMPLIB" "$DOWNLOAD_DIR"
+        return
+    fi
 
     EXPORTED_EPUB=$(find "$OUTPUT_DIR" -name "*.epub" -newer "$EXPORT_MARKER" 2>/dev/null | head -1 || true)
 
-    rm -f "$EXPORT_MARKER" "$NO_EMAIL_MARKER"
+    rm -f "$EXPORT_MARKER" "$RECIPIENTS_FILE"
     rm -rf "$TMPLIB" "$DOWNLOAD_DIR"
-    rm -f "$ACSM_FILE"
+    rm -f "$WORK_FILE"
     echo ">>> Done: $BASENAME → $OUTPUT_DIR"
 
     if [ -n "${SEND2EREADER_URL:-}" ] && [ -n "${EXPORTED_EPUB:-}" ]; then
