@@ -77,15 +77,19 @@ find_plugin() {
         | while IFS= read -r f; do [ -s "$f" ] && echo "$f"; done \
         | head -1 || true)
     if [ -z "$found" ]; then
-        echo ">>> $name not found locally — downloading from noDRM GitHub..." >&2
-        mkdir -p /resources
-        if wget -q -O "/resources/$name" \
-                "https://github.com/noDRM/DeDRM_tools/releases/download/v10.0.3/$name" \
-           && [ -s "/resources/$name" ]; then
-            found="/resources/$name"
+        echo ">>> $name not found locally — downloading DeDRM_tools_10.0.3.zip from noDRM GitHub..." >&2
+        local tmpzip
+        tmpzip=$(mktemp --suffix=.zip)
+        if wget -q -O "$tmpzip" \
+                "https://github.com/noDRM/DeDRM_tools/releases/download/v10.0.3/DeDRM_tools_10.0.3.zip" \
+           && [ -s "$tmpzip" ]; then
+            mkdir -p /resources
+            unzip -q "$tmpzip" "DeDRM_Plugin.zip" "Obok_plugin.zip" -d /resources/
+            rm -f "$tmpzip"
+            found=$(ls "/resources/$name" 2>/dev/null | head -1 || true)
         else
-            rm -f "/resources/$name"
-            echo "ERROR: Could not download $name." >&2
+            rm -f "$tmpzip"
+            echo "ERROR: Could not download DeDRM_tools_10.0.3.zip." >&2
             exit 1
         fi
     fi
