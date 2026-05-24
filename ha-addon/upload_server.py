@@ -3,11 +3,43 @@
 import email.parser
 import html
 import http.server
+import json
 import os
 import pathlib
 
 INPUT_DIR = os.environ.get("INPUT_DIR", "/share/calibre-dedrm/input")
 PORT = int(os.environ.get("INGRESS_PORT", "8099"))
+EMAIL_TO_LIST = json.loads(os.environ.get("EMAIL_TO_JSON", "[]"))
+EMAIL_CONFIGURED = bool(os.environ.get("SMTP_HOST", "").strip()) and bool(EMAIL_TO_LIST)
+
+
+def _build_email_toggle() -> str:
+    if not EMAIL_CONFIGURED:
+        return ""
+    if len(EMAIL_TO_LIST) == 1:
+        addr = html.escape(EMAIL_TO_LIST[0])
+        return f"""
+    <label class="toggle-row" for="email_addr_0">
+      <span class="toggle-label">Email book after decryption</span>
+      <span class="toggle-switch">
+        <input type="checkbox" name="email_addr" value="{addr}" id="email_addr_0" checked>
+        <span class="slider"></span>
+      </span>
+    </label>"""
+    rows = "\n".join(
+        f'      <label class="email-row">'
+        f'<input type="checkbox" name="email_addr" value="{html.escape(a)}" checked>'
+        f"<span>{html.escape(a)}</span></label>"
+        for a in EMAIL_TO_LIST
+    )
+    return f"""
+    <div class="email-section">
+      <div class="email-section-label">Email book to:</div>
+{rows}
+    </div>"""
+
+
+_EMAIL_TOGGLE = _build_email_toggle()
 
 PAGE = """\
 <!DOCTYPE html>
@@ -67,6 +99,65 @@ PAGE = """\
     background: #f0f2f5; border-radius: 4px; padding: 4px 10px;
     display: none;
   }}
+  .toggle-row {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding: 12px 0 0;
+    border-top: 1px solid #eee;
+    cursor: pointer;
+    user-select: none;
+  }}
+  .toggle-label {{ color: #444; font-size: .93em; }}
+  .toggle-switch {{ position: relative; width: 42px; height: 24px; flex-shrink: 0; }}
+  .toggle-switch input {{ opacity: 0; width: 0; height: 0; position: absolute; }}
+  .slider {{
+    position: absolute; inset: 0;
+    background: #ccc;
+    border-radius: 24px;
+    transition: background .2s;
+  }}
+  .slider::before {{
+    content: '';
+    position: absolute;
+    width: 18px; height: 18px;
+    left: 3px; top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,.25);
+  }}
+  .toggle-switch input:checked + .slider {{ background: #03a9f4; }}
+  .toggle-switch input:checked + .slider::before {{ transform: translateX(18px); }}
+  .email-section {{
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #eee;
+  }}
+  .email-section-label {{
+    font-size: .8em;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-bottom: 8px;
+  }}
+  .email-row {{
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 4px 0;
+    cursor: pointer;
+    font-size: .92em;
+    color: #333;
+    user-select: none;
+  }}
+  .email-row input[type=checkbox] {{
+    width: 15px; height: 15px;
+    accent-color: #03a9f4;
+    cursor: pointer;
+    flex-shrink: 0;
+  }}
   button {{
     margin-top: 20px;
     width: 100%;
@@ -109,6 +200,7 @@ PAGE = """\
       <div class="drop-label"><strong>Choose file</strong> or drag &amp; drop here</div>
     </div>
     <div class="file-name" id="fname"></div>
+    {email_toggle}
     <button type="submit" id="btn">Upload</button>
   </form>
   {message}
@@ -153,25 +245,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = self.rfile.read(length)
             msg_bytes = f"Content-Type: {ct}\r\n\r\n".encode() + body
             msg = email.parser.BytesParser().parsebytes(msg_bytes)
-            field = filename = data = None
+            filename = data = None
+            selected_emails = []
             for part in msg.walk():
-                if part.get_param("name", header="content-disposition") == "acsm":
+                name = part.get_param("name", header="content-disposition")
+                if name == "acsm":
                     filename = os.path.basename(part.get_filename() or "").strip()
                     data = part.get_payload(decode=True)
-                    break
+                elif name == "email_addr":
+                    val = (part.get_payload(decode=True) or b"").decode().strip()
+                    if val:
+                        selected_emails.append(val)
             if not filename or not data:
                 raise ValueError("No file received.")
             if not filename.lower().endswith(".acsm"):
                 raise ValueError("Only .acsm files are accepted.")
             dest = pathlib.Path(INPUT_DIR) / filename
             dest.write_bytes(data)
+            if EMAIL_CONFIGURED:
+                pathlib.Path(str(dest) + ".email_recipients").write_text(
+                    "\n".join(selected_emails)
+                )
             msg_html = f'<div class="msg ok"><strong>{html.escape(filename)}</strong> queued for processing.</div>'
             self._html(200, msg_html)
         except Exception as exc:
             self._html(400, f'<div class="msg err">Error: {html.escape(str(exc))}</div>')
 
     def _html(self, code: int, message: str):
-        body = PAGE.format(message=message).encode()
+        body = PAGE.format(message=message, email_toggle=_EMAIL_TOGGLE).encode()
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

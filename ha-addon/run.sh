@@ -13,6 +13,7 @@ ADOBE_PASSWORD=$(jq --raw-output '.adobe_password // empty' "$OPTIONS" 2>/dev/nu
 SEND2EREADER_URL=$(jq --raw-output '.send2ereader_url // empty' "$OPTIONS" 2>/dev/null || true)
 NOTIFY_SERVICES=$(jq --raw-output '.notify_services // [] | .[]' "$OPTIONS" 2>/dev/null || true)
 EMAIL_TO=$(jq --raw-output '.email_to // [] | .[]' "$OPTIONS" 2>/dev/null || true)
+EMAIL_TO_JSON=$(jq --compact-output '.email_to // []' "$OPTIONS" 2>/dev/null || echo '[]')
 SMTP_HOST=$(jq --raw-output '.smtp_host // empty' "$OPTIONS" 2>/dev/null || true)
 SMTP_PORT=$(jq --raw-output '.smtp_port // 587' "$OPTIONS" 2>/dev/null || true)
 SMTP_USER=$(jq --raw-output '.smtp_user // empty' "$OPTIONS" 2>/dev/null || true)
@@ -150,8 +151,9 @@ notify_ha() {
 
 send_book_email() {
     local epub="$1"
+    local recipients="${2:-$EMAIL_TO}"
     [ -z "$SMTP_HOST" ] && return 0
-    [ -z "$EMAIL_TO" ] && return 0
+    [ -z "${recipients:-}" ] && return 0
     while IFS= read -r _to; do
         [ -z "$_to" ] && continue
         echo ">>> Emailing $(basename "$epub") to $_to..."
@@ -162,11 +164,13 @@ send_book_email() {
         else
             echo ">>> WARNING: Email to $_to failed."
         fi
-    done <<< "$EMAIL_TO"
+    done <<< "$recipients"
 }
 
 # ── Upload server (HA ingress) ────────────────────────────────────────────────
 INPUT_DIR="$INPUT_DIR" INGRESS_PORT="${INGRESS_PORT:-8099}" \
+    SMTP_HOST="${SMTP_HOST:-}" \
+    EMAIL_TO_JSON="${EMAIL_TO_JSON:-[]}" \
     python3 /upload_server.py &
 
 # ── Service loop ──────────────────────────────────────────────────────────────
@@ -176,8 +180,15 @@ echo "    Output: $OUTPUT_DIR"
 
 process_acsm() {
     local ACSM_FILE="$1"
-    local BASENAME
+    local BASENAME RECIPIENTS_FILE USE_SIDECAR SIDECAR_RECIPS
     BASENAME=$(basename "$ACSM_FILE")
+    RECIPIENTS_FILE="${ACSM_FILE}.email_recipients"
+    USE_SIDECAR=false
+    SIDECAR_RECIPS=""
+    if [ -f "$RECIPIENTS_FILE" ]; then
+        SIDECAR_RECIPS=$(cat "$RECIPIENTS_FILE")
+        USE_SIDECAR=true
+    fi
     echo ">>> Processing: $BASENAME"
 
     # Step 1: Download the DRM-protected ePub/PDF from Adobe's fulfillment servers
@@ -188,6 +199,7 @@ process_acsm() {
         echo ">>> ERROR: Download failed for $BASENAME."
         echo "    Is the device activated? Can it reach Adobe's fulfillment servers?"
         mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        rm -f "$RECIPIENTS_FILE"
         rm -rf "$DOWNLOAD_DIR"
         return
     fi
@@ -197,6 +209,7 @@ process_acsm() {
     if [ -z "${ENCRYPTED_FILE:-}" ]; then
         echo ">>> ERROR: acsmdownloader produced no output file for $BASENAME."
         mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        rm -f "$RECIPIENTS_FILE"
         rm -rf "$DOWNLOAD_DIR"
         return
     fi
@@ -207,6 +220,7 @@ process_acsm() {
     if ! adept_remove -f "$ENCRYPTED_FILE" -o "$DRM_FREE_FILE"; then
         echo ">>> ERROR: DRM removal failed for $(basename "$ENCRYPTED_FILE")."
         mv "$ACSM_FILE" "${ACSM_FILE%.acsm}.failed" 2>/dev/null || true
+        rm -f "$RECIPIENTS_FILE"
         rm -rf "$DOWNLOAD_DIR"
         return
     fi
@@ -221,7 +235,7 @@ process_acsm() {
 
     EXPORTED_EPUB=$(find "$OUTPUT_DIR" -name "*.epub" -newer "$EXPORT_MARKER" 2>/dev/null | head -1 || true)
 
-    rm -f "$EXPORT_MARKER"
+    rm -f "$EXPORT_MARKER" "$NO_EMAIL_MARKER"
     rm -rf "$TMPLIB" "$DOWNLOAD_DIR"
     rm -f "$ACSM_FILE"
     echo ">>> Done: $BASENAME → $OUTPUT_DIR"
@@ -244,7 +258,11 @@ process_acsm() {
     fi
 
     if [ -n "${EXPORTED_EPUB:-}" ]; then
-        send_book_email "$EXPORTED_EPUB"
+        if [ "$USE_SIDECAR" = true ]; then
+            [ -n "${SIDECAR_RECIPS:-}" ] && send_book_email "$EXPORTED_EPUB" "$SIDECAR_RECIPS"
+        else
+            send_book_email "$EXPORTED_EPUB"
+        fi
     fi
 }
 
