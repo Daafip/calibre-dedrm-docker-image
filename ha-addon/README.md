@@ -36,6 +36,7 @@ Set `adobe_email` and `adobe_password` in the **Configuration** tab before start
 | Option | Description |
 | --- | --- |
 | `send2ereader_url` | URL of the send2ereader add-on, e.g. `http://homeassistant.local:3001` — leave empty to disable |
+| `calibre_web_url` | URL of a Calibre-Web instance, e.g. `http://homeassistant.local:8083` — shown as a quick link in the upload UI, leave empty to hide |
 
 ### Notifications
 
@@ -57,7 +58,7 @@ Set `adobe_email` and `adobe_password` in the **Configuration** tab before start
 
 ## Usage
 
-**Browser upload:** Open the add-on's web UI via the sidebar. Drag and drop (or select) an `.acsm` file and click **Upload** — it is queued immediately. If email is configured, a per-address toggle appears so you can choose which addresses receive the book.
+**Browser upload:** Open the add-on's web UI via the sidebar. Drag and drop (or select) an `.acsm` file and click **Upload** — it is queued immediately. If email is configured, a per-address toggle appears so you can choose which addresses receive the book. Configured `send2ereader_url` and `calibre_web_url` appear as quick-link buttons at the bottom of the page.
 
 **Manual drop:** Place `.acsm` files in `/share/calibre-dedrm/input/` via SSH, Samba, or the HA File Editor add-on.
 

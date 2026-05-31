@@ -12,6 +12,26 @@ PORT = int(os.environ.get("INGRESS_PORT", "8099"))
 EMAIL_TO_LIST = json.loads(os.environ.get("EMAIL_TO_JSON", "[]"))
 EMAIL_CONFIGURED = bool(os.environ.get("SMTP_HOST", "").strip()) and bool(EMAIL_TO_LIST)
 
+_QUICK_LINK_SOURCES = [
+    ("send2ereader", os.environ.get("SEND2EREADER_URL", "").strip()),
+    ("Calibre Web",  os.environ.get("CALIBRE_WEB_URL",  "").strip()),
+]
+
+
+def _build_quick_links() -> str:
+    links = [(label, url) for label, url in _QUICK_LINK_SOURCES if url]
+    if not links:
+        return ""
+    items = "\n".join(
+        f'  <a class="ql-btn" href="{html.escape(url)}" target="_blank" rel="noopener">'
+        f'{html.escape(label)} &#8599;</a>'
+        for label, url in links
+    )
+    return f'\n<div class="quick-links">\n  <span class="ql-label">Open</span>\n{items}\n</div>'
+
+
+_QUICK_LINKS = _build_quick_links()
+
 
 def _build_email_toggle() -> str:
     if not EMAIL_CONFIGURED:
@@ -182,6 +202,34 @@ PAGE = """\
   }}
   .ok  {{ background: #e8f5e9; color: #1b5e20; border-left: 4px solid #43a047; }}
   .err {{ background: #fdecea; color: #b71c1c; border-left: 4px solid #e53935; }}
+  .quick-links {{
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #eee;
+  }}
+  .ql-label {{
+    font-size: .8em;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-right: 2px;
+  }}
+  .ql-btn {{
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 13px;
+    background: #f0f2f5;
+    color: #333;
+    border-radius: 20px;
+    font-size: .88em;
+    text-decoration: none;
+    transition: background .15s, color .15s;
+  }}
+  .ql-btn:hover {{ background: #03a9f4; color: #fff; }}
 </style>
 </head>
 <body>
@@ -204,6 +252,7 @@ PAGE = """\
     <button type="submit" id="btn">Upload</button>
   </form>
   {message}
+  {quick_links}
 </div>
 <script>
   var picker = document.getElementById('picker');
@@ -282,7 +331,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._html(400, f'<div class="msg err">Error: {html.escape(str(exc))}</div>')
 
     def _html(self, code: int, message: str):
-        body = PAGE.format(message=message, email_toggle=_EMAIL_TOGGLE).encode()
+        body = PAGE.format(message=message, email_toggle=_EMAIL_TOGGLE, quick_links=_QUICK_LINKS).encode()
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

@@ -11,6 +11,7 @@ OPTIONS=/data/options.json
 ADOBE_EMAIL=$(jq --raw-output '.adobe_email // empty' "$OPTIONS" 2>/dev/null || true)
 ADOBE_PASSWORD=$(jq --raw-output '.adobe_password // empty' "$OPTIONS" 2>/dev/null || true)
 SEND2EREADER_URL=$(jq --raw-output '.send2ereader_url // empty' "$OPTIONS" 2>/dev/null || true)
+CALIBRE_WEB_URL=$(jq --raw-output '.calibre_web_url // empty' "$OPTIONS" 2>/dev/null || true)
 CALIBRE_LIBRARY=$(jq --raw-output '.calibre_library // empty' "$OPTIONS" 2>/dev/null || true)
 NOTIFY_SERVICES=$(jq --raw-output '.notify_services // [] | .[]' "$OPTIONS" 2>/dev/null || true)
 EMAIL_TO=$(jq --raw-output '.email_to // [] | .[]' "$OPTIONS" 2>/dev/null || true)
@@ -188,6 +189,8 @@ send_book_email() {
 INPUT_DIR="$INPUT_DIR" INGRESS_PORT="${INGRESS_PORT:-8099}" \
     SMTP_HOST="${SMTP_HOST:-}" \
     EMAIL_TO_JSON="${EMAIL_TO_JSON:-[]}" \
+    SEND2EREADER_URL="${SEND2EREADER_URL:-}" \
+    CALIBRE_WEB_URL="${CALIBRE_WEB_URL:-}" \
     python3 /upload_server.py &
 
 # ── Service loop ──────────────────────────────────────────────────────────────
