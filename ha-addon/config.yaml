@@ -17,6 +17,7 @@ arch:
 map:
 - share:rw
 - data:rw
+- media:rw
 
 options:
   # Adobe ID credentials for device activation (required on first run).
