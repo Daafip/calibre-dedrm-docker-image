@@ -11,6 +11,7 @@ OPTIONS=/data/options.json
 ADOBE_EMAIL=$(jq --raw-output '.adobe_email // empty' "$OPTIONS" 2>/dev/null || true)
 ADOBE_PASSWORD=$(jq --raw-output '.adobe_password // empty' "$OPTIONS" 2>/dev/null || true)
 SEND2EREADER_URL=$(jq --raw-output '.send2ereader_url // empty' "$OPTIONS" 2>/dev/null || true)
+CALIBRE_LIBRARY=$(jq --raw-output '.calibre_library // empty' "$OPTIONS" 2>/dev/null || true)
 NOTIFY_SERVICES=$(jq --raw-output '.notify_services // [] | .[]' "$OPTIONS" 2>/dev/null || true)
 EMAIL_TO=$(jq --raw-output '.email_to // [] | .[]' "$OPTIONS" 2>/dev/null || true)
 EMAIL_TO_JSON=$(jq --compact-output '.email_to // []' "$OPTIONS" 2>/dev/null || echo '[]')
@@ -153,6 +154,17 @@ notify_ha() {
         "http://supervisor/core/api/services/notify/$service" >/dev/null || true
 }
 
+add_to_calibre_library() {
+    local epub="$1"
+    [ -z "${CALIBRE_LIBRARY:-}" ] && return 0
+    echo ">>> Adding to Calibre library: $CALIBRE_LIBRARY"
+    if calibredb add "$epub" --with-library "$CALIBRE_LIBRARY" 2>&1; then
+        echo ">>> Added to Calibre library."
+    else
+        echo ">>> WARNING: Failed to add to Calibre library (book still saved to output dir)."
+    fi
+}
+
 send_book_email() {
     local epub="$1"
     local recipients="${2:-$EMAIL_TO}"
@@ -274,6 +286,8 @@ process_acsm() {
     rm -rf "$TMPLIB" "$DOWNLOAD_DIR"
     rm -f "$WORK_FILE"
     echo ">>> Done: $BASENAME → $OUTPUT_DIR"
+
+    [ -n "${EXPORTED_EPUB:-}" ] && add_to_calibre_library "$EXPORTED_EPUB"
 
     if [ -n "${SEND2EREADER_URL:-}" ] && [ -n "${EXPORTED_EPUB:-}" ]; then
         echo ">>> Uploading to send2ereader..."

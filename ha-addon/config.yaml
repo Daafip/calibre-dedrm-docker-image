@@ -1,7 +1,7 @@
 name: "Calibre DeDRM"
 description: >
   Watches /share/calibre-dedrm/input for .acsm files and converts them to DRM-free ePubs using libgourou (native ADEPT) + Calibre DeDRM. No Wine required. Output lands in /share/calibre-dedrm/books.
-version: "1.9.3"
+version: "1.9.4"
 slug: "calibre_dedrm"
 init: false
 homeassistant_api: true
@@ -31,6 +31,10 @@ options:
   # HA notification services to ping when a book is ready (e.g. mobile_app_phone).
   # Uses the Supervisor token — no extra auth needed. Leave empty to disable.
   notify_services: []
+  # Path to an existing Calibre library directory to import each book into.
+  # e.g. /share/calibre/library — leave empty to disable.
+  # The directory will be created as a new empty library if it does not exist.
+  calibre_library: ""
   # Email delivery: send the decrypted ePub as an attachment.
   # smtp_host is required to enable; all other fields have sensible defaults.
   email_to: []
@@ -47,6 +51,7 @@ schema:
   - str
   email_to:
   - email
+  calibre_library: str?
   smtp_host: str?
   smtp_port: int?
   smtp_user: str?
