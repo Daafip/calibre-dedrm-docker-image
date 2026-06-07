@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal ACSM upload server — served via HA ingress."""
+"""Minimal book upload server — served via HA ingress."""
 import email.parser
 import html
 import http.server
@@ -239,11 +239,11 @@ PAGE = """\
       <path d="M19 9h-4V3H9v6H5l7 7 7-7zm-8 2V5h2v6h1.17L12 13.17 9.83 11H11zm-6 7h14v2H5v-2z"/>
     </svg>
   </div>
-  <h1>Upload ACSM</h1>
-  <p class="sub">Drop your library loan file — it will be decrypted within 30&nbsp;seconds.</p>
+  <h1>Upload Book</h1>
+  <p class="sub">Drop an ACSM or ebook file — it will be imported within 30&nbsp;seconds.</p>
   <form method="post" enctype="multipart/form-data" id="form">
     <div class="drop-zone" id="zone">
-      <input type="file" name="acsm" accept=".acsm" required id="picker">
+      <input type="file" name="book" accept=".acsm,.epub,.pdf,.mobi,.azw,.azw3,.cbz,.fb2" required id="picker">
       <div class="drop-icon">📂</div>
       <div class="drop-label"><strong>Choose file</strong> or drag &amp; drop here</div>
     </div>
@@ -308,7 +308,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             selected_emails = []
             for part in msg.walk():
                 name = part.get_param("name", header="content-disposition")
-                if name == "acsm":
+                if name == "book":
                     filename = os.path.basename(part.get_filename() or "").strip()
                     data = part.get_payload(decode=True)
                 elif name == "email_addr":
@@ -317,8 +317,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         selected_emails.append(val)
             if not filename or not data:
                 raise ValueError("No file received.")
-            if not filename.lower().endswith(".acsm"):
-                raise ValueError("Only .acsm files are accepted.")
+            _ALLOWED = {".acsm", ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".fb2"}
+            if not any(filename.lower().endswith(ext) for ext in _ALLOWED):
+                raise ValueError(f"Unsupported file type. Accepted: {', '.join(sorted(_ALLOWED))}")
             dest = pathlib.Path(INPUT_DIR) / filename
             dest.write_bytes(data)
             if EMAIL_CONFIGURED:

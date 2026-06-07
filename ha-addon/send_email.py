@@ -20,7 +20,8 @@ user = os.environ["SMTP_USER"]
 password = os.environ["SMTP_PASS"]
 
 filename = os.path.basename(epub_path)
-subject = filename[:-5] if filename.lower().endswith(".epub") else filename
+ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+subject = filename[:-(len(ext) + 1)] if ext else filename
 
 # File size check — warn early rather than fail mid-transfer
 try:
@@ -39,8 +40,17 @@ msg["To"] = to_addr
 msg["Subject"] = subject
 msg.attach(MIMEText("Your book is attached."))
 
+_MIME_TYPES = {
+    "epub": ("application", "epub+zip"),
+    "pdf":  ("application", "pdf"),
+    "mobi": ("application", "x-mobipocket-ebook"),
+    "azw":  ("application", "vnd.amazon.ebook"),
+    "azw3": ("application", "vnd.amazon.ebook"),
+}
+maintype, subtype = _MIME_TYPES.get(ext, ("application", "octet-stream"))
+
 with open(epub_path, "rb") as f:
-    part = MIMEBase("application", "epub+zip")
+    part = MIMEBase(maintype, subtype)
     part.set_payload(f.read())
     encoders.encode_base64(part)
     part.add_header("Content-Disposition", "attachment", filename=filename)

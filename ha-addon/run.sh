@@ -318,10 +318,66 @@ process_acsm() {
     fi
 }
 
+process_ebook() {
+    local EBOOK_FILE="$1"
+    local BASENAME EXT WORK_FILE DEST RECIPIENTS_FILE USE_SIDECAR SIDECAR_RECIPS
+    BASENAME=$(basename "$EBOOK_FILE")
+    EXT="${BASENAME##*.}"
+
+    WORK_FILE="${EBOOK_FILE%.$EXT}.processing"
+    mv "$EBOOK_FILE" "$WORK_FILE"
+
+    RECIPIENTS_FILE="${WORK_FILE}.email_recipients"
+    [ -f "${EBOOK_FILE}.email_recipients" ] && mv "${EBOOK_FILE}.email_recipients" "$RECIPIENTS_FILE"
+    USE_SIDECAR=false
+    SIDECAR_RECIPS=""
+    if [ -f "$RECIPIENTS_FILE" ]; then
+        SIDECAR_RECIPS=$(cat "$RECIPIENTS_FILE")
+        USE_SIDECAR=true
+    fi
+
+    echo ">>> Importing ebook: $BASENAME"
+    DEST="$OUTPUT_DIR/$BASENAME"
+    cp "$WORK_FILE" "$DEST"
+    rm -f "$RECIPIENTS_FILE" "$WORK_FILE"
+    echo ">>> Done: $BASENAME → $OUTPUT_DIR"
+
+    add_to_calibre_library "$DEST"
+
+    # send2ereader only supports epub delivery
+    if [ -n "${SEND2EREADER_URL:-}" ] && [ "$(echo "$EXT" | tr '[:upper:]' '[:lower:]')" = "epub" ]; then
+        echo ">>> Uploading to send2ereader..."
+        local DOWNLOAD_URL
+        DOWNLOAD_URL=$(push_to_send2ereader "$DEST" "$SEND2EREADER_URL")
+        if [ -n "$DOWNLOAD_URL" ]; then
+            echo "┌──────────────────────────────────────────┐"
+            echo "│  Book ready on Kobo                      │"
+            echo "│  URL  : $DOWNLOAD_URL"
+            echo "└──────────────────────────────────────────┘"
+            while IFS= read -r _svc; do
+                [ -n "$_svc" ] && notify_ha "Book ready" "$DOWNLOAD_URL" "$_svc"
+            done <<< "$NOTIFY_SERVICES"
+        else
+            echo ">>> WARNING: send2ereader upload failed (is it running at $SEND2EREADER_URL?)"
+        fi
+    fi
+
+    if [ "$USE_SIDECAR" = true ]; then
+        [ -n "${SIDECAR_RECIPS:-}" ] && send_book_email "$DEST" "$SIDECAR_RECIPS"
+    else
+        send_book_email "$DEST"
+    fi
+}
+
 while true; do
     for ACSM_FILE in "$INPUT_DIR"/*.acsm; do
         [ -f "$ACSM_FILE" ] || continue
         process_acsm "$ACSM_FILE"
+    done
+    for EBOOK_FILE in "$INPUT_DIR"/*.epub "$INPUT_DIR"/*.pdf "$INPUT_DIR"/*.mobi \
+                      "$INPUT_DIR"/*.azw "$INPUT_DIR"/*.azw3 "$INPUT_DIR"/*.cbz "$INPUT_DIR"/*.fb2; do
+        [ -f "$EBOOK_FILE" ] || continue
+        process_ebook "$EBOOK_FILE"
     done
     sleep 30
 done
