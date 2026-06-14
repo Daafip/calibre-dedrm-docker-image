@@ -40,7 +40,7 @@ def _build_email_toggle() -> str:
         addr = html.escape(EMAIL_TO_LIST[0])
         return f"""
     <label class="toggle-row" for="email_addr_0">
-      <span class="toggle-label">Email book after decryption</span>
+      <span class="toggle-label">Email book when done</span>
       <span class="toggle-switch">
         <input type="checkbox" name="email_addr" value="{addr}" id="email_addr_0" checked>
         <span class="slider"></span>
@@ -240,10 +240,10 @@ PAGE = """\
     </svg>
   </div>
   <h1>Upload Book</h1>
-  <p class="sub">Drop an ACSM or ebook file — it will be imported within 30&nbsp;seconds.</p>
+  <p class="sub">Drop an ACSM to decrypt it, or an ebook to import it directly.</p>
   <form method="post" enctype="multipart/form-data" id="form">
     <div class="drop-zone" id="zone">
-      <input type="file" name="book" accept=".acsm,.epub,.pdf,.mobi,.azw,.azw3,.cbz,.fb2" required id="picker">
+      <input type="file" name="book" required id="picker">
       <div class="drop-icon">📂</div>
       <div class="drop-label"><strong>Choose file</strong> or drag &amp; drop here</div>
     </div>
