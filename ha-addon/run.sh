@@ -20,6 +20,9 @@ SMTP_HOST=$(jq --raw-output '.smtp_host // empty' "$OPTIONS" 2>/dev/null || true
 SMTP_PORT=$(jq --raw-output '.smtp_port // 587' "$OPTIONS" 2>/dev/null || true)
 SMTP_USER=$(jq --raw-output '.smtp_user // empty' "$OPTIONS" 2>/dev/null || true)
 SMTP_PASS=$(jq --raw-output '.smtp_password // empty' "$OPTIONS" 2>/dev/null || true)
+KB_USERNAME=$(jq --raw-output '.kb_username // empty' "$OPTIONS" 2>/dev/null || true)
+KB_PASSWORD=$(jq --raw-output '.kb_password // empty' "$OPTIONS" 2>/dev/null || true)
+LIBRARY_POLL_HOURS=$(jq --raw-output '.library_poll_hours // 6' "$OPTIONS" 2>/dev/null || true)
 
 INPUT_DIR="/share/calibre-dedrm/input"
 OUTPUT_DIR="/share/calibre-dedrm/books"
@@ -184,6 +187,26 @@ send_book_email() {
         fi
     done <<< "$recipients"
 }
+
+# ── onlinebibliotheek.nl bookshelf sensor ─────────────────────────────────────
+# Periodically scrape "Mijn boekenplank" with the user's session cookie and
+# publish sensor.onlinebibliotheek_boekenplank to Home Assistant.
+library_sensor_loop() {
+    local interval=$(( LIBRARY_POLL_HOURS * 3600 ))
+    [ "$interval" -lt 60 ] && interval=60
+    while true; do
+        KB_USERNAME="$KB_USERNAME" KB_PASSWORD="$KB_PASSWORD" python3 /library_sensor.py || \
+            echo ">>> Bookshelf sensor update failed (will retry in ${LIBRARY_POLL_HOURS} h)."
+        sleep "$interval"
+    done
+}
+
+if [ -n "${KB_USERNAME:-}" ] && [ -n "${KB_PASSWORD:-}" ]; then
+    echo ">>> onlinebibliotheek.nl bookshelf sensor enabled (every ${LIBRARY_POLL_HOURS} h)."
+    library_sensor_loop &
+else
+    echo ">>> Bookshelf sensor disabled (set kb_username + kb_password to enable)."
+fi
 
 # ── Upload server (HA ingress) ────────────────────────────────────────────────
 INPUT_DIR="$INPUT_DIR" INGRESS_PORT="${INGRESS_PORT:-8099}" \

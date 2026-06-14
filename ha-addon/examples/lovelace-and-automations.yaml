@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Examples for sensor.onlinebibliotheek_boekenplank (added in addon v2.1.0)
+#
+# Sensor shape:
+#   state                 number of books currently on loan (or "unavailable")
+#   attributes.books[]    { title, author, format, due (ISO), due_raw, catalogue_id, url }
+#   attributes.titles[]   flat list of titles
+#
+# Replace `notify.mobile_app_phone` with your own notify service.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1. LOVELACE CARD — paste into a dashboard (Edit dashboard → ⋮ → Raw editor,
+#    or "Add card" → "Manual"). Uses the built-in Markdown card, no HACS needed.
+# ═══════════════════════════════════════════════════════════════════════════
+type: markdown
+title: Mijn boekenplank
+content: >
+  {% set books = state_attr('sensor.onlinebibliotheek_boekenplank', 'books') %}
+  {% if states('sensor.onlinebibliotheek_boekenplank') == 'unavailable' %}
+  ⚠️ **Geen gegevens** — log in op onlinebibliotheek.nl en zet
+  `kb_session_cookie` in de add-on.
+  {% elif not books %}
+  Geen boeken geleend.
+  {% else %}
+  {% if state_attr('sensor.onlinebibliotheek_boekenplank', 'stale') %}
+  ⚠️ _Verouderd — sessie verlopen, laatste update
+  {{ state_attr('sensor.onlinebibliotheek_boekenplank', 'last_fetch_success') }}.
+  Werk `kb_session_cookie` bij voor verse gegevens._
+
+  {% endif -%}
+  | Titel | Auteur | Inleveren |
+  | --- | --- | --- |
+  {% for b in books -%}
+  {%- set days = ((as_timestamp(b.due) - now().timestamp()) / 86400) | round(0, 'floor')
+        if b.due else none -%}
+  | [{{ b.title }}]({{ b.url }}) | {{ b.author or '—' }} |
+  {{ as_timestamp(b.due) | timestamp_custom('%-d %b %Y', true) if b.due else (b.due_raw or '—') }}
+  {{- ' ⏰' if days is not none and days <= 3 else '' }} |
+  {% endfor %}
+  {% endif %}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2. AUTOMATIONS — Settings → Automations → ⋮ → Edit in YAML, paste one block.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 2a. Daily reminder for books due within 3 days ─────────────────────────────
+alias: Bibliotheek - boeken bijna inleveren
+description: Meldt 's ochtends welke geleende boeken binnen 3 dagen terug moeten.
+triggers:
+  - trigger: time
+    at: "09:00:00"
+conditions:
+  - condition: template
+    value_template: >
+      {% set books = state_attr('sensor.onlinebibliotheek_boekenplank', 'books') or [] %}
+      {{ books | selectattr('due', 'ne', None) | map(attribute='due')
+         | map('as_timestamp') | select('lt', now().timestamp() + 3 * 86400)
+         | list | count > 0 }}
+actions:
+  - action: notify.mobile_app_phone
+    data:
+      title: 📚 Bibliotheekboeken bijna inleveren
+      message: >
+        {% set books = state_attr('sensor.onlinebibliotheek_boekenplank', 'books') or [] %}
+        {%- for b in books if b.due and as_timestamp(b.due) < now().timestamp() + 3 * 86400 %}
+        • {{ b.title }} — {{ as_timestamp(b.due) | timestamp_custom('%-d %b', true) }}
+        {%- endfor %}
+mode: single
+
+# ---------------------------------------------------------------------------
+
+# 2b. Alert when the session cookie expired (sensor goes unavailable) ─────────
+alias: Bibliotheek - sessie verlopen
+description: Waarschuwt wanneer de boekenplank-sensor onbereikbaar wordt.
+triggers:
+  - trigger: state
+    entity_id: sensor.onlinebibliotheek_boekenplank
+    to: unavailable
+    for:
+      minutes: 15
+actions:
+  - action: notify.mobile_app_phone
+    data:
+      title: 📚 Bibliotheek-sessie verlopen
+      message: >
+        Log opnieuw in op onlinebibliotheek.nl en werk kb_session_cookie
+        in de Calibre DeDRM add-on bij.
+mode: single

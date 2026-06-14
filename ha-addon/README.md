@@ -54,6 +54,38 @@ Set `adobe_email` and `adobe_password` in the **Configuration** tab before start
 | `smtp_user` | SMTP login username (usually your email address) |
 | `smtp_password` | SMTP password or app password (masked in UI) |
 
+### Onlinebibliotheek bookshelf sensor
+
+Publishes a Home Assistant sensor listing the e-books and audiobooks you currently
+have on loan from [onlinebibliotheek.nl](https://www.onlinebibliotheek.nl).
+
+| Option | Description |
+| --- | --- |
+| `kb_username` | Your onlinebibliotheek.nl (KB) login — the add-on logs in automatically via KB's iWelcome SSO |
+| `kb_password` | Your onlinebibliotheek.nl password (masked in UI) |
+| `library_poll_hours` | How often to refresh the sensor, in hours (default `6`) |
+
+Set `kb_username` + `kb_password` to enable it. The add-on replicates KB's
+iWelcome login (`login.kb.nl`) over HTTP, completes the OAuth redirect, and reads
+your bookshelf — no browser or manual cookie needed. Accounts that enforce
+two-factor authentication (2FA/OTP) are **not** supported by this flow.
+
+The add-on creates **`sensor.onlinebibliotheek_boekenplank`**:
+
+- **state**: number of books currently on loan
+- **attributes**: `books` (list with `title`, `author`, `format`, `due` ISO date,
+  `catalogue_id`, `url`), `titles` (flat list of titles), `stale` (bool),
+  `last_fetch_success` (timestamp)
+
+The last successful result is cached in `/data/library_boekenplank.json`
+(persists across restarts), so if a refresh ever fails (login error, site down)
+the sensor **keeps showing your last known loans** with `stale: true` and an
+`error` attribute. It only becomes `unavailable` if it has never managed a
+successful fetch.
+
+Ready-to-paste Lovelace card + automations (due-soon reminder, session-expired
+alert) are in [`examples/lovelace-and-automations.yaml`](examples/lovelace-and-automations.yaml).
+
 ---
 
 ## Usage

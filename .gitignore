@@ -6,3 +6,6 @@ test-data/calibre-config/
 test-data/books/
 test-data/options.json
 test-data/resources/
+example/
+__pycache__/
+test-data
