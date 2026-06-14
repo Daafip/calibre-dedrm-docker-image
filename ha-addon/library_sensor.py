@@ -295,6 +295,96 @@ def get_bookshelf():
     return kb_login.login(user, pw)
 
 
+INPUT_DIR = os.environ.get("INPUT_DIR", "/share/calibre-dedrm/input")
+CALIBRE_LIBRARY = os.environ.get("CALIBRE_LIBRARY", "").strip()
+DOWNLOAD_STATE_FILE = os.environ.get(
+    "DOWNLOAD_STATE_FILE", "/data/library_downloaded.json"
+)
+
+
+def _load_download_state():
+    try:
+        with open(DOWNLOAD_STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_download_state(state):
+    try:
+        os.makedirs(os.path.dirname(DOWNLOAD_STATE_FILE) or ".", exist_ok=True)
+        with open(DOWNLOAD_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+    except OSError as e:
+        print(f">>> WARNING: could not write {DOWNLOAD_STATE_FILE}: {e}", file=sys.stderr)
+
+
+def _in_calibre_library(title):
+    """True if a book with this title already exists in the configured Calibre
+    library. Best-effort: if calibredb is unavailable or the library is unset,
+    return False (we then rely on the download-state file for dedup)."""
+    if not CALIBRE_LIBRARY or not title:
+        return False
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["calibredb", "search", f'title:"{title}"', "--with-library", CALIBRE_LIBRARY],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f">>> WARNING: calibredb check failed ({e}); relying on download state.", file=sys.stderr)
+        return False
+    # `search` exits 0 and prints ids when found; non-zero / "No books" when not.
+    return out.returncode == 0 and out.stdout.strip() not in ("", "No books found")
+
+
+def _safe_filename(name):
+    name = re.sub(r"[^\w\s.-]", "", name, flags=re.UNICODE).strip()
+    name = re.sub(r"\s+", "_", name)
+    return name or "book"
+
+
+def auto_download_loans(jar, books):
+    """For each loaned book not already in Calibre, download its .acsm into the
+    input dir so the existing pipeline decrypts and imports it."""
+    import book_download
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    state = _load_download_state()
+    os.makedirs(INPUT_DIR, exist_ok=True)
+    new = 0
+    for b in books:
+        cid = b.get("catalogue_id")
+        url = b.get("url")
+        title = b.get("title") or "book"
+        if not cid or not url:
+            continue
+        fmt = (b.get("format") or "").lower()
+        if fmt and "ebook" not in fmt:
+            # Audiobooks (luisterboek) etc. are not .acsm-downloadable.
+            continue
+        # Already downloaded for this loan period (same due date)?
+        prev = state.get(cid)
+        if prev and prev.get("due") == b.get("due"):
+            continue
+        if _in_calibre_library(title):
+            print(f">>> Skipping '{title}' — already in Calibre library.")
+            state[cid] = {"due": b.get("due"), "status": "in_library"}
+            continue
+        try:
+            fallback = _safe_filename(f"{title}-{cid}") + ".acsm"
+            name, content = book_download.download_acsm(opener, url, fallback_name=fallback)
+            dest = os.path.join(INPUT_DIR, _safe_filename(f"{title}-{cid}") + ".acsm")
+            with open(dest, "wb") as f:
+                f.write(content)
+            print(f">>> Downloaded '{title}' -> {dest} ({len(content)} bytes); queued for import.")
+            state[cid] = {"due": b.get("due"), "status": "downloaded", "file": os.path.basename(dest)}
+            new += 1
+        except (urllib.error.URLError, OSError, RuntimeError) as e:
+            print(f">>> WARNING: could not download '{title}': {e}", file=sys.stderr)
+    _save_download_state(state)
+    print(f">>> Auto-download: {new} new book(s) queued.")
+
+
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "--parse":
         with open(sys.argv[2], encoding="utf-8") as f:
@@ -303,6 +393,9 @@ def main():
         return
 
     debug = "--debug" in sys.argv
+    # --download-now forces the auto-download regardless of the AUTO_DOWNLOAD_LOANS
+    # toggle (used by the "Download now" button in the web UI).
+    force_download = "--download-now" in sys.argv
 
     try:
         jar, html = get_bookshelf()
@@ -327,6 +420,9 @@ def main():
     else:
         print(">>> Failed to publish sensor (see warnings above).", file=sys.stderr)
         sys.exit(1)
+
+    if force_download or os.environ.get("AUTO_DOWNLOAD_LOANS", "").lower() in ("1", "true", "yes"):
+        auto_download_loans(jar, books)
 
 
 if __name__ == "__main__":

@@ -64,6 +64,7 @@ have on loan from [onlinebibliotheek.nl](https://www.onlinebibliotheek.nl).
 | `kb_username` | Your onlinebibliotheek.nl (KB) login — the add-on logs in automatically via KB's iWelcome SSO |
 | `kb_password` | Your onlinebibliotheek.nl password (masked in UI) |
 | `library_poll_hours` | How often to refresh the sensor, in hours (default `6`) |
+| `auto_download_loans` | Automatically download loaned e-books that aren't in your Calibre library yet (default `false`) |
 
 Set `kb_username` + `kb_password` to enable it. The add-on replicates KB's
 iWelcome login (`login.kb.nl`) over HTTP, completes the OAuth redirect, and reads
@@ -86,11 +87,24 @@ successful fetch.
 Ready-to-paste Lovelace card + automations (due-soon reminder, session-expired
 alert) are in [`examples/lovelace-and-automations.yaml`](examples/lovelace-and-automations.yaml).
 
+**Auto-download (`auto_download_loans: true`):** on each poll the add-on opens
+each loaned e-book's catalogue page, grabs its `.acsm` download link, and drops
+the `.acsm` into the input dir — the normal pipeline then decrypts it to a
+DRM-free ePub (and imports it into `calibre_library` if configured). Books
+already in the Calibre library are skipped, and each loan is downloaded only once
+per loan period (tracked in `/data/library_downloaded.json`). Audiobooks are
+skipped. Note this triggers Adobe fulfillment, hence it is off by default.
+
 ---
 
 ## Usage
 
 **Browser upload:** Open the add-on's web UI via the sidebar. Drag and drop (or select) an `.acsm` file and click **Upload** — it is queued immediately. If email is configured, a per-address toggle appears so you can choose which addresses receive the book. Configured `send2ereader_url` and `calibre_web_url` appear as quick-link buttons at the bottom of the page.
+
+**Download loaned e-books:** When `kb_username`/`kb_password` are set, the web UI
+shows a **Download loaned e-books to Calibre** button that fetches any loaned
+e-books not yet in your library on demand (same as `auto_download_loans`, but
+manual). It may take a minute while it logs in and downloads.
 
 **Manual drop:** Place `.acsm` files in `/share/calibre-dedrm/input/` via SSH, Samba, or the HA File Editor add-on.
 

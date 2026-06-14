@@ -1,5 +1,19 @@
 # Changelog
 
+## V2.3.1
+
+Add a **"Download loaned e-books to Calibre"** button to the add-on web UI —
+manually triggers the loan download/import on demand (shown when
+kb_username/kb_password are set), independent of the `auto_download_loans` toggle.
+
+## V2.3.0
+
+Add `auto_download_loans` (default off): automatically downloads each loaned
+e-book that isn't in your Calibre library yet — grabs the `.acsm` from the book's
+catalogue page and feeds it to the existing decrypt/import pipeline. Skips books
+already in the library and re-downloads only once per loan period. Audiobooks are
+skipped.
+
 ## V2.2.1
 
 Remove the manual `kb_session_cookie` fallback (automatic login covers it) and

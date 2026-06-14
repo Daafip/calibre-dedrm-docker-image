@@ -6,9 +6,16 @@ import http.server
 import json
 import os
 import pathlib
+import subprocess
+import urllib.parse
 
 INPUT_DIR = os.environ.get("INPUT_DIR", "/share/calibre-dedrm/input")
 PORT = int(os.environ.get("INGRESS_PORT", "8099"))
+LIBRARY_SENSOR = os.environ.get("LIBRARY_SENSOR_PATH", "/library_sensor.py")
+# The "Download loaned e-books" button only appears when login is configured.
+DOWNLOAD_ENABLED = bool(
+    os.environ.get("KB_USERNAME", "").strip() and os.environ.get("KB_PASSWORD", "").strip()
+)
 EMAIL_TO_LIST = json.loads(os.environ.get("EMAIL_TO_JSON", "[]"))
 EMAIL_CONFIGURED = bool(os.environ.get("SMTP_HOST", "").strip()) and bool(EMAIL_TO_LIST)
 
@@ -60,6 +67,20 @@ def _build_email_toggle() -> str:
 
 
 _EMAIL_TOGGLE = _build_email_toggle()
+
+
+def _build_download_section() -> str:
+    if not DOWNLOAD_ENABLED:
+        return ""
+    return """
+<form method="post" id="dlform" class="dl-section">
+  <input type="hidden" name="action" value="download_loans">
+  <div class="dl-label">onlinebibliotheek.nl</div>
+  <button type="submit" id="dlbtn" class="secondary">⬇ Download loaned e-books to Calibre</button>
+</form>"""
+
+
+_DOWNLOAD_SECTION = _build_download_section()
 
 PAGE = """\
 <!DOCTYPE html>
@@ -193,6 +214,21 @@ PAGE = """\
   }}
   button:hover {{ background: #0290d0; }}
   button:disabled {{ background: #a0d8f1; cursor: default; }}
+  .dl-section {{
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #eee;
+  }}
+  .dl-label {{
+    font-size: .8em;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-bottom: 2px;
+  }}
+  button.secondary {{ margin-top: 8px; background: #5c6bc0; }}
+  button.secondary:hover {{ background: #3f51b5; }}
+  button.secondary:disabled {{ background: #c5cae9; }}
   .msg {{
     margin-top: 20px;
     padding: 12px 16px;
@@ -251,6 +287,7 @@ PAGE = """\
     {email_toggle}
     <button type="submit" id="btn">Upload</button>
   </form>
+  {download_section}
   {message}
   {quick_links}
 </div>
@@ -284,6 +321,13 @@ PAGE = """\
   document.getElementById('form').addEventListener('submit', function() {{
     btn.disabled = true; btn.textContent = 'Uploading…';
   }});
+  var dlform = document.getElementById('dlform');
+  if (dlform) {{
+    dlform.addEventListener('submit', function() {{
+      var b = document.getElementById('dlbtn');
+      b.disabled = true; b.textContent = 'Downloading… (may take a minute)';
+    }});
+  }}
 </script>
 </body>
 </html>
@@ -300,8 +344,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         ct = self.headers.get("Content-Type", "")
         length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+
+        # The "Download loaned e-books" button posts a urlencoded action.
+        if "application/x-www-form-urlencoded" in ct:
+            params = urllib.parse.parse_qs(body.decode("utf-8", "replace"))
+            if params.get("action", [""])[0] == "download_loans":
+                return self._handle_download_loans()
+
         try:
-            body = self.rfile.read(length)
             msg_bytes = f"Content-Type: {ct}\r\n\r\n".encode() + body
             msg = email.parser.BytesParser().parsebytes(msg_bytes)
             filename = data = None
@@ -331,8 +382,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as exc:
             self._html(400, f'<div class="msg err">Error: {html.escape(str(exc))}</div>')
 
+    def _handle_download_loans(self):
+        """Run library_sensor --download-now and report what was queued."""
+        try:
+            proc = subprocess.run(
+                ["python3", LIBRARY_SENSOR, "--download-now"],
+                capture_output=True, text=True, timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            return self._html(504, '<div class="msg err">Download timed out (still running in the background).</div>')
+        except Exception as exc:
+            return self._html(500, f'<div class="msg err">Error: {html.escape(str(exc))}</div>')
+
+        out = (proc.stdout or "") + (proc.stderr or "")
+        downloaded = [l for l in out.splitlines() if ">>> Downloaded '" in l]
+        skipped = [l for l in out.splitlines() if "already in Calibre" in l]
+        summary = next((l for l in out.splitlines() if "Auto-download:" in l), "")
+        if proc.returncode != 0 and not downloaded:
+            tail = html.escape("\n".join(out.splitlines()[-6:]) or "no output")
+            return self._html(500, f'<div class="msg err">Download failed:<br><pre>{tail}</pre></div>')
+
+        lines = [html.escape(l.replace(">>> ", "")) for l in downloaded] or \
+                [html.escape(summary.replace(">>> ", "")) or "Nothing new to download."]
+        note = f" ({len(skipped)} already in library)" if skipped else ""
+        body = "<br>".join(lines)
+        return self._html(200, f'<div class="msg ok"><strong>Bookshelf checked{html.escape(note)}.</strong><br>{body}</div>')
+
     def _html(self, code: int, message: str):
-        body = PAGE.format(message=message, email_toggle=_EMAIL_TOGGLE, quick_links=_QUICK_LINKS).encode()
+        body = PAGE.format(message=message, email_toggle=_EMAIL_TOGGLE,
+                           download_section=_DOWNLOAD_SECTION, quick_links=_QUICK_LINKS).encode()
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

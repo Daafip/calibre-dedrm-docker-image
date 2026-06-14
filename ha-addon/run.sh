@@ -23,6 +23,7 @@ SMTP_PASS=$(jq --raw-output '.smtp_password // empty' "$OPTIONS" 2>/dev/null || 
 KB_USERNAME=$(jq --raw-output '.kb_username // empty' "$OPTIONS" 2>/dev/null || true)
 KB_PASSWORD=$(jq --raw-output '.kb_password // empty' "$OPTIONS" 2>/dev/null || true)
 LIBRARY_POLL_HOURS=$(jq --raw-output '.library_poll_hours // 6' "$OPTIONS" 2>/dev/null || true)
+AUTO_DOWNLOAD_LOANS=$(jq --raw-output '.auto_download_loans // false' "$OPTIONS" 2>/dev/null || true)
 
 INPUT_DIR="/share/calibre-dedrm/input"
 OUTPUT_DIR="/share/calibre-dedrm/books"
@@ -195,7 +196,10 @@ library_sensor_loop() {
     local interval=$(( LIBRARY_POLL_HOURS * 3600 ))
     [ "$interval" -lt 60 ] && interval=60
     while true; do
-        KB_USERNAME="$KB_USERNAME" KB_PASSWORD="$KB_PASSWORD" python3 /library_sensor.py || \
+        KB_USERNAME="$KB_USERNAME" KB_PASSWORD="$KB_PASSWORD" \
+        AUTO_DOWNLOAD_LOANS="$AUTO_DOWNLOAD_LOANS" \
+        INPUT_DIR="$INPUT_DIR" CALIBRE_LIBRARY="$CALIBRE_LIBRARY" \
+        python3 /library_sensor.py || \
             echo ">>> Bookshelf sensor update failed (will retry in ${LIBRARY_POLL_HOURS} h)."
         sleep "$interval"
     done
@@ -209,11 +213,15 @@ else
 fi
 
 # ── Upload server (HA ingress) ────────────────────────────────────────────────
+# KB_* + CALIBRE_LIBRARY are exported so the "Download loaned e-books" button can
+# run library_sensor --download-now (the subprocess inherits this env).
 INPUT_DIR="$INPUT_DIR" INGRESS_PORT="${INGRESS_PORT:-8099}" \
     SMTP_HOST="${SMTP_HOST:-}" \
     EMAIL_TO_JSON="${EMAIL_TO_JSON:-[]}" \
     SEND2EREADER_URL="${SEND2EREADER_URL:-}" \
     CALIBRE_WEB_URL="${CALIBRE_WEB_URL:-}" \
+    KB_USERNAME="${KB_USERNAME:-}" KB_PASSWORD="${KB_PASSWORD:-}" \
+    CALIBRE_LIBRARY="${CALIBRE_LIBRARY:-}" \
     python3 /upload_server.py &
 
 # ── Service loop ──────────────────────────────────────────────────────────────

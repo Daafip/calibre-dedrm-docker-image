@@ -1,7 +1,7 @@
 name: "Calibre DeDRM"
 description: >
   Watches /share/calibre-dedrm/input for .acsm files and converts them to DRM-free ePubs using libgourou (native ADEPT) + Calibre DeDRM. No Wine required. Output lands in /share/calibre-dedrm/books.
-version: "2.2.1"
+version: "2.3.1"
 slug: "calibre_dedrm"
 init: false
 homeassistant_api: true
@@ -48,6 +48,11 @@ options:
   kb_password: ""
   # How often (hours) to refresh the bookshelf sensor. Default 6.
   library_poll_hours: 6
+  # Automatically download every loaned book that is not yet in your Calibre
+  # library: the .acsm is fetched and dropped into the input dir, then the normal
+  # pipeline decrypts it to a DRM-free ePub. Requires kb_username/kb_password.
+  # Off by default (downloading a loan triggers Adobe fulfillment).
+  auto_download_loans: false
   # Email delivery: send the decrypted ePub as an attachment.
   # smtp_host is required to enable; all other fields have sensible defaults.
   email_to: []
@@ -69,6 +74,7 @@ schema:
   kb_username: str?
   kb_password: password?
   library_poll_hours: int?
+  auto_download_loans: bool?
   smtp_host: str?
   smtp_port: int?
   smtp_user: str?
