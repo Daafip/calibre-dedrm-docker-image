@@ -13,10 +13,26 @@ Used by library_sensor.py; can also be run standalone for testing:
 """
 import os
 import sys
+import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 
 from library_sensor import _BROWSER_HEADERS, _read_body
+
+
+class BookNotAvailable(Exception):
+    """Raised when a loaned book has no download option (read-online only,
+    reserved, or expired) — i.e. it cannot be downloaded as an .acsm."""
+
+
+def _encode_url(url):
+    """Percent-encode non-ASCII characters in a URL so urllib can put it in the
+    HTTP request line (book slugs contain accents, e.g. 'ik-ga-tóch-...')."""
+    parts = urllib.parse.urlsplit(url)
+    # safe="/%" / "...%" keeps already-encoded sequences and structural chars.
+    path = urllib.parse.quote(parts.path, safe="/%:@!$&'()*+,;=~-._")
+    query = urllib.parse.quote(parts.query, safe="/%:@!$&'()*+,;=~-._?")
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
 
 
 class _DownloadLinkParser(HTMLParser):
@@ -52,21 +68,19 @@ def _filename_from_response(resp, fallback):
 
 
 def download_acsm(opener, book_url, fallback_name="book.acsm"):
-    """Return (filename, content_bytes) for the book's .acsm, or raise."""
-    req = urllib.request.Request(book_url, headers=dict(_BROWSER_HEADERS))
+    """Return (filename, content_bytes) for the book's .acsm.
+    Raises BookNotAvailable if the book has no download option."""
+    req = urllib.request.Request(_encode_url(book_url), headers=dict(_BROWSER_HEADERS))
     with opener.open(req, timeout=30) as resp:
         html = _read_body(resp)
 
     dl_url = find_download_url(html)
     if not dl_url:
-        raise RuntimeError(
-            f"no download button found on {book_url} — is the book actually "
-            "loaned (vs. only reserved/expired)?"
-        )
+        raise BookNotAvailable("no download button on the catalogue page")
     if dl_url.startswith("/"):
         dl_url = "https://www.onlinebibliotheek.nl" + dl_url
 
-    req = urllib.request.Request(dl_url, headers=dict(_BROWSER_HEADERS))
+    req = urllib.request.Request(_encode_url(dl_url), headers=dict(_BROWSER_HEADERS))
     with opener.open(req, timeout=60) as resp:
         # .acsm is small XML; read raw bytes (do not html-decode).
         content = resp.read()

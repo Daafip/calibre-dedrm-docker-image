@@ -395,18 +395,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._html(500, f'<div class="msg err">Error: {html.escape(str(exc))}</div>')
 
         out = (proc.stdout or "") + (proc.stderr or "")
-        downloaded = [l for l in out.splitlines() if ">>> Downloaded '" in l]
-        skipped = [l for l in out.splitlines() if "already in Calibre" in l]
-        summary = next((l for l in out.splitlines() if "Auto-download:" in l), "")
-        if proc.returncode != 0 and not downloaded:
-            tail = html.escape("\n".join(out.splitlines()[-6:]) or "no output")
+        lines_out = out.splitlines()
+        downloaded = [l.split(">>> Downloaded '", 1)[1].split("'", 1)[0]
+                      for l in lines_out if ">>> Downloaded '" in l]
+        unavailable = [l.split("Not available for download: '", 1)[1].split("'", 1)[0]
+                       for l in lines_out if "Not available for download: '" in l]
+        skipped = [l for l in lines_out if "already in Calibre" in l]
+        summary = next((l for l in lines_out if "Auto-download:" in l), "")
+
+        if proc.returncode != 0 and not downloaded and not unavailable:
+            tail = html.escape("\n".join(lines_out[-6:]) or "no output")
             return self._html(500, f'<div class="msg err">Download failed:<br><pre>{tail}</pre></div>')
 
-        lines = [html.escape(l.replace(">>> ", "")) for l in downloaded] or \
-                [html.escape(summary.replace(">>> ", "")) or "Nothing new to download."]
+        parts = []
+        for t in downloaded:
+            parts.append(f"⬇ <strong>{html.escape(t)}</strong> queued for import.")
+        for t in unavailable:
+            parts.append(f'⚠️ Book "<strong>{html.escape(t)}</strong>" not available for download.')
+        if not parts:
+            parts.append(html.escape(summary.replace(">>> ", "")) or "Nothing new to download.")
         note = f" ({len(skipped)} already in library)" if skipped else ""
-        body = "<br>".join(lines)
-        return self._html(200, f'<div class="msg ok"><strong>Bookshelf checked{html.escape(note)}.</strong><br>{body}</div>')
+        cls = "ok" if downloaded or not unavailable else "err"
+        body = "<br>".join(parts)
+        return self._html(200, f'<div class="msg {cls}"><strong>Bookshelf checked{html.escape(note)}.</strong><br>{body}</div>')
 
     def _html(self, code: int, message: str):
         body = PAGE.format(message=message, email_toggle=_EMAIL_TOGGLE,

@@ -1,5 +1,13 @@
 # Changelog
 
+## V2.3.2
+
+Auto-download robustness: books that can't be downloaded (read-online only /
+reserved) are now reported per-book as "Book … not available for download"
+instead of crashing the batch, and book URLs with accented characters (e.g.
+"Ik ga tóch iets zeggen") are percent-encoded so they no longer raise a
+UnicodeEncodeError. One failing book no longer aborts the others.
+
 ## V2.3.1
 
 Add a **"Download loaned e-books to Calibre"** button to the add-on web UI —

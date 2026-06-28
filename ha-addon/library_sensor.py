@@ -379,7 +379,12 @@ def auto_download_loans(jar, books):
             print(f">>> Downloaded '{title}' -> {dest} ({len(content)} bytes); queued for import.")
             state[cid] = {"due": b.get("due"), "status": "downloaded", "file": os.path.basename(dest)}
             new += 1
-        except (urllib.error.URLError, OSError, RuntimeError) as e:
+        except book_download.BookNotAvailable:
+            # Read-online-only / reserved / expired. Not recorded in state — a
+            # re-check is cheap and keeps the reported status accurate.
+            print(f">>> Not available for download: '{title}'")
+        except Exception as e:
+            # Any other failure on one book must not abort the whole batch.
             print(f">>> WARNING: could not download '{title}': {e}", file=sys.stderr)
     _save_download_state(state)
     print(f">>> Auto-download: {new} new book(s) queued.")
