@@ -266,6 +266,23 @@ PAGE = """\
     transition: background .15s, color .15s;
   }}
   .ql-btn:hover {{ background: #03a9f4; color: #fff; }}
+  @media (prefers-color-scheme: dark) {{
+    body {{ background: #121212; color: #e8eaed; }}
+    .card {{ background: #1e1e1e; box-shadow: 0 2px 16px rgba(0,0,0,.35); }}
+    h1 {{ color: #f5f5f5; }}
+    .sub {{ color: #a6a6a6; }}
+    .drop-zone {{ border-color: #555; }}
+    .drop-zone:hover, .drop-zone.over {{ background: #102b38; }}
+    .drop-label {{ color: #c5c5c5; }}
+    .file-name, .ql-btn {{ background: #2b2b2b; color: #e0e0e0; }}
+    .toggle-row, .email-section, .dl-section, .quick-links {{ border-color: #383838; }}
+    .toggle-label, .email-row {{ color: #d0d0d0; }}
+    .slider {{ background: #666; }}
+    .email-section-label, .dl-label, .ql-label {{ color: #aaa; }}
+    .ok {{ background: #183521; color: #b7e1c0; }}
+    .err {{ background: #3a1d1d; color: #ffb4ab; }}
+    .ql-btn:hover {{ background: #03a9f4; color: #fff; }}
+  }}
 </style>
 </head>
 <body>
