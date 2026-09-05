@@ -17,6 +17,8 @@ Usage:
   python3 library_sensor.py              # log in, parse, publish to HA
   python3 library_sensor.py --parse FILE # parse a local HTML file, print JSON (for testing)
 """
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -300,6 +302,36 @@ CALIBRE_LIBRARY = os.environ.get("CALIBRE_LIBRARY", "").strip()
 DOWNLOAD_STATE_FILE = os.environ.get(
     "DOWNLOAD_STATE_FILE", "/data/library_downloaded.json"
 )
+# Guards auto_download_loans() against overlapping runs: the scheduled poll
+# (library_sensor_loop, which also fires once immediately at addon startup)
+# and the "Download loaned e-books" button both invoke this script. Without a
+# lock, two overlapping runs can both read the same on-disk state before
+# either has saved it, both download the same loan's .acsm, and the pipeline
+# then emails the resulting ePub twice.
+DOWNLOAD_LOCK_FILE = os.environ.get(
+    "DOWNLOAD_LOCK_FILE", "/data/library_downloaded.lock"
+)
+
+
+@contextlib.contextmanager
+def _download_lock():
+    """Non-blocking exclusive lock. Yields True if acquired, False if another
+    auto-download run is already in progress (caller should skip, not block)."""
+    os.makedirs(os.path.dirname(DOWNLOAD_LOCK_FILE) or ".", exist_ok=True)
+    fh = open(DOWNLOAD_LOCK_FILE, "w")
+    acquired = False
+    try:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except OSError:
+            acquired = False
+        yield acquired
+    finally:
+        if acquired:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fh, fcntl.LOCK_UN)
+        fh.close()
 
 
 def _load_download_state():
@@ -378,6 +410,7 @@ def auto_download_loans(jar, books):
                 f.write(content)
             print(f">>> Downloaded '{title}' -> {dest} ({len(content)} bytes); queued for import.")
             state[cid] = {"due": b.get("due"), "status": "downloaded", "file": os.path.basename(dest)}
+            _save_download_state(state)
             new += 1
         except book_download.BookNotAvailable:
             # Read-online-only / reserved / expired. Not recorded in state — a
@@ -427,7 +460,14 @@ def main():
         sys.exit(1)
 
     if force_download or os.environ.get("AUTO_DOWNLOAD_LOANS", "").lower() in ("1", "true", "yes"):
-        auto_download_loans(jar, books)
+        with _download_lock() as acquired:
+            if acquired:
+                auto_download_loans(jar, books)
+            else:
+                print(
+                    ">>> Skipping auto-download: another download run is already in progress.",
+                    file=sys.stderr,
+                )
 
 
 if __name__ == "__main__":
