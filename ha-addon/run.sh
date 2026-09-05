@@ -175,6 +175,12 @@ send_book_email() {
     local recipients="${2:-$EMAIL_TO}"
     [ -z "$SMTP_HOST" ] && return 0
     [ -z "${recipients:-}" ] && return 0
+    # De-duplicate (case-insensitive) — a repeated address in the "email_to"
+    # config list, or a repeated selection in the upload form, would otherwise
+    # send the same book twice while only printing this "Email config" header
+    # once, making the duplicate hard to notice in the logs.
+    recipients=$(printf '%s\n' "$recipients" | awk 'NF && !seen[tolower($0)]++')
+    [ -z "${recipients:-}" ] && return 0
     echo ">>> Email config: host=$SMTP_HOST port=$SMTP_PORT user=$SMTP_USER"
     while IFS= read -r _to; do
         [ -z "$_to" ] && continue
